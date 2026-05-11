@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<JUCERPROJECT id="kTsnup" name="SoundZapper" projectType="guiapp" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
+  <MAINGROUP id="vbuFvz" name="SoundZapper">
+    <GROUP id="{205829BA-02B3-E901-409F-1AE21BDC1667}" name="Source">
+      <FILE id="tlhMfE" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
+      <FILE id="EC9mOF" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>
+      <FILE id="nyA3TV" name="MainComponent.cpp" compile="1" resource="0"
+            file="Source/MainComponent.cpp"/>
+    </GROUP>
+  </MAINGROUP>
+  <MODULES>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors_headless" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
+    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+  </MODULES>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1"/>
+  <EXPORTFORMATS>
+    <VS2026 targetFolder="Builds/VisualStudio2026">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="SoundZapper"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="SoundZapper"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_devices" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_utils" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_core" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_data_structures" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_events" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_graphics" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_gui_basics" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_gui_extra" path="../../JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="../../JUCE/modules"/>
+      </MODULEPATHS>
+    </VS2026>
+    <VS2022 targetFolder="Builds/VisualStudio2022">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug"/>
+        <CONFIGURATION isDebug="0" name="Release"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_devices" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_formats" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_processors" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_processors_headless" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_audio_utils" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_core" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_data_structures" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_events" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_graphics" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_gui_basics" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+        <MODULEPATH id="juce_gui_extra" path="C:\Users\takayuki\Visualstudio\juce-8.0.12-windows\JUCE\modules"/>
+      </MODULEPATHS>
+    </VS2022>
+  </EXPORTFORMATS>
+</JUCERPROJECT>

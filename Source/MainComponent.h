@@ -32,21 +32,13 @@ public:
 
 private:
     //==========================================================================
-    enum class TransportState
-    {
-        Stopped,
-        Starting,
-        Playing,
-        Stopping
-    };
+    enum class TransportState { Stopped, Starting, Playing, Stopping };
 
     void changeState(TransportState newState);
-
     void selectFolder();
     void loadPlaylistFromFolder(const juce::File& folder);
-
-    void playCurrentFile();
-    void playNextFile();
+    void play();
+    void playNext();
     void playButtonClicked();
 
     //==========================================================================
@@ -56,10 +48,10 @@ private:
 
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::AudioFormatManager formatManager;
+    juce::AudioFormatManager                       formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
-    juce::AudioTransportSource transportSource;
-    TransportState state{ TransportState::Stopped };
+    juce::AudioTransportSource                     transportSource;
+    TransportState                                 state{ TransportState::Stopped };
 
     juce::File              currentFolder;
     juce::Array<juce::File> playlist;

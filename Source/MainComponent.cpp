@@ -41,10 +41,8 @@ MainComponent::~MainComponent()
 //   Called when the transport stops naturally (track finished) to load and start the next file.
 void MainComponent::timerCallback()
 {
-    //stopTimer();
-
     // Advance to the next file
-    playNextFile();
+    playNext();
 
     if (currentIndex >= 0 && currentIndex < playlist.size())
     {
@@ -106,9 +104,8 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
         {
             if (state == TransportState::Playing)
             {
-                // Track finished naturally -> move to Stopped, then let the Timer advance to the next track
+                // Track finished naturally
                 changeState(TransportState::Stopped);
-                startTimer(250); // timerCallback fires after 200 ms to play the next track
             }
             else if (state == TransportState::Stopping)
             {
@@ -153,7 +150,7 @@ void MainComponent::selectFolder()
 {
     chooser = std::make_unique<juce::FileChooser>(
         "Select a folder containing MP3 files...",
-        juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+        juce::File::getCurrentWorkingDirectory(),
         ""
     );
 
@@ -172,7 +169,6 @@ void MainComponent::selectFolder()
                 if (!playlist.isEmpty())
                 {
                     currentIndex = 0;
-                    playCurrentFile(); // Load the first file (playback starts when Play is pressed)
                     currentPositionLabel.setText(
                         "1 / " + juce::String(playlist.size()),
                         juce::dontSendNotification);
@@ -205,8 +201,9 @@ void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
         playButton.setEnabled(true);
 }
 
-void MainComponent::playCurrentFile()
+void MainComponent::play()
 {
+    startTimer(200);
     if (currentIndex < 0 || currentIndex >= playlist.size())
         return;
 
@@ -221,7 +218,7 @@ void MainComponent::playCurrentFile()
     }
 }
 
-void MainComponent::playNextFile()
+void MainComponent::playNext()
 {
     if (playlist.isEmpty())
         return;
@@ -231,13 +228,14 @@ void MainComponent::playNextFile()
         nextIndex = 0; // Wrap around to the first track
 
     currentIndex = nextIndex;
-    playCurrentFile();
+    play();
 }
 
 void MainComponent::playButtonClicked()
 {
     if (state == TransportState::Stopped)
     {
+        play();
         changeState(TransportState::Starting);
     }
     else

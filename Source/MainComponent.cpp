@@ -2,74 +2,247 @@
 
 //==============================================================================
 MainComponent::MainComponent()
+    : state(TransportState::Stopped)
 {
-    // Make sure you set the size of the component after
-    // you add any child components.
-    setSize (800, 600);
+    // Register common audio formats such as MP3
+    formatManager.registerBasicFormats();
+    transportSource.addChangeListener(this);
 
-    // Some platforms require permissions to open input channels so request that here
-    if (juce::RuntimePermissions::isRequired (juce::RuntimePermissions::recordAudio)
-        && ! juce::RuntimePermissions::isGranted (juce::RuntimePermissions::recordAudio))
-    {
-        juce::RuntimePermissions::request (juce::RuntimePermissions::recordAudio,
-                                           [&] (bool granted) { setAudioChannels (granted ? 2 : 0, 2); });
-    }
-    else
-    {
-        // Specify the number of input and output channels that we want to open
-        setAudioChannels (2, 2);
-    }
+    // [Open Folder] button
+    addAndMakeVisible(&openButton);
+    openButton.setButtonText("Open Folder...");
+    openButton.onClick = [this] { selectFolder(); };
+
+    // [Play/Stop] button
+    addAndMakeVisible(&playButton);
+    playButton.setButtonText("Play");
+    playButton.onClick = [this] { playButtonClicked(); };
+    playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::green);
+    playButton.setEnabled(false);
+
+    // Label showing the current file name
+    addAndMakeVisible(&currentPositionLabel);
+    currentPositionLabel.setText("", juce::dontSendNotification);
+
+    // Initialize audio device (stereo output, no input)
+    setAudioChannels(0, 2);
+
+    setSize(400, 200);
 }
 
 MainComponent::~MainComponent()
 {
-    // This shuts down the audio device and clears the audio source.
+    stopTimer();
     shutdownAudio();
 }
 
 //==============================================================================
-void MainComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
+// Timer callback:
+//   Called when the transport stops naturally (track finished) to load and start the next file.
+void MainComponent::timerCallback()
 {
-    // This function will be called when the audio device is started, or when
-    // its settings (i.e. sample rate, block size, etc) are changed.
+    //stopTimer();
 
-    // You can use this function to initialise any resources you might need,
-    // but be careful - it will be called on the audio thread, not the GUI thread.
+    // Advance to the next file
+    playNextFile();
 
-    // For more details, see the help for AudioProcessor::prepareToPlay()
+    if (currentIndex >= 0 && currentIndex < playlist.size())
+    {
+        // Update the label
+        currentPositionLabel.setText(
+            juce::String(currentIndex + 1) + " / " + juce::String(playlist.size()),
+            juce::dontSendNotification);
+
+        // Rewind to the beginning and start playback
+        transportSource.setPosition(0.0);
+        changeState(TransportState::Starting);
+    }
 }
 
-void MainComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
+//==============================================================================
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
-    // Your audio-processing code goes here!
+    transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+}
 
-    // For more details, see the help for AudioProcessor::getNextAudioBlock()
-
-    // Right now we are not producing any data, in which case we need to clear the buffer
-    // (to prevent the output of random noise)
-    bufferToFill.clearActiveBufferRegion();
+void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
+{
+    if (readerSource.get() == nullptr)
+    {
+        bufferToFill.clearActiveBufferRegion();
+        return;
+    }
+    transportSource.getNextAudioBlock(bufferToFill);
 }
 
 void MainComponent::releaseResources()
 {
-    // This will be called when the audio device stops, or when it is being
-    // restarted due to a setting change.
-
-    // For more details, see the help for AudioProcessor::releaseResources()
+    transportSource.releaseResources();
 }
 
 //==============================================================================
-void MainComponent::paint (juce::Graphics& g)
+void MainComponent::paint(juce::Graphics& g)
 {
-    // (Our component is opaque, so we must completely fill the background with a solid colour)
-    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
-
-    // You can add your drawing code here!
+    g.fillAll(getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId));
 }
 
 void MainComponent::resized()
 {
-    // This is called when the MainContentComponent is resized.
-    // If you add any child components, this is where you should
-    // update their positions.
+    openButton.setBounds(10, 10, getWidth() - 20, 30);
+    playButton.setBounds(10, 50, getWidth() - 20, 30);
+    currentPositionLabel.setBounds(10, 100, getWidth() - 20, 25);
+}
+
+//==============================================================================
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
+{
+    if (source == &transportSource)
+    {
+        if (transportSource.isPlaying())
+        {
+            changeState(TransportState::Playing);
+        }
+        else
+        {
+            if (state == TransportState::Playing)
+            {
+                // Track finished naturally -> move to Stopped, then let the Timer advance to the next track
+                changeState(TransportState::Stopped);
+                startTimer(250); // timerCallback fires after 200 ms to play the next track
+            }
+            else if (state == TransportState::Stopping)
+            {
+                // User pressed Stop -> just halt, do not start the timer
+                changeState(TransportState::Stopped);
+            }
+        }
+    }
+}
+
+//==============================================================================
+void MainComponent::changeState(TransportState newState)
+{
+    if (state != newState)
+    {
+        state = newState;
+
+        switch (state)
+        {
+        case TransportState::Stopped:
+            playButton.setButtonText("Play");
+            playButton.setEnabled(true);
+            break;
+
+        case TransportState::Starting:
+            transportSource.start();
+            break;
+
+        case TransportState::Playing:
+            playButton.setButtonText("Stop");
+            break;
+
+        case TransportState::Stopping:
+            transportSource.stop();
+            break;
+        }
+    }
+}
+
+//==============================================================================
+void MainComponent::selectFolder()
+{
+    chooser = std::make_unique<juce::FileChooser>(
+        "Select a folder containing MP3 files...",
+        juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+        ""
+    );
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectDirectories;
+
+    chooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc)
+        {
+            auto folder = fc.getResult();
+
+            if (folder != juce::File{} && folder.isDirectory())
+            {
+                currentFolder = folder;
+                loadPlaylistFromFolder(currentFolder);
+
+                if (!playlist.isEmpty())
+                {
+                    currentIndex = 0;
+                    playCurrentFile(); // Load the first file (playback starts when Play is pressed)
+                    currentPositionLabel.setText(
+                        "1 / " + juce::String(playlist.size()),
+                        juce::dontSendNotification);
+                }
+            }
+        });
+}
+
+void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
+{
+    playlist.clear();
+
+    for (auto& file : folder.findChildFiles(juce::File::findFiles, false, "*.mp3"))
+        playlist.add(file);
+
+    // Sort files numerically by filename (ascending)
+    std::sort(playlist.begin(), playlist.end(),
+        [](const juce::File& a, const juce::File& b)
+        {
+            return a.getFileNameWithoutExtension().getIntValue()
+                < b.getFileNameWithoutExtension().getIntValue();
+        });
+
+    for (const auto& file : playlist)
+        DBG(file.getFileName());
+
+    if (playlist.isEmpty())
+        currentIndex = -1;
+    else
+        playButton.setEnabled(true);
+}
+
+void MainComponent::playCurrentFile()
+{
+    if (currentIndex < 0 || currentIndex >= playlist.size())
+        return;
+
+    auto file = playlist[currentIndex];
+    auto* reader = formatManager.createReaderFor(file);
+
+    if (reader != nullptr)
+    {
+        auto newSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
+        transportSource.setSource(newSource.get(), 0, nullptr, reader->sampleRate);
+        readerSource = std::move(newSource);
+    }
+}
+
+void MainComponent::playNextFile()
+{
+    if (playlist.isEmpty())
+        return;
+
+    int nextIndex = currentIndex + 1;
+    if (nextIndex >= playlist.size())
+        nextIndex = 0; // Wrap around to the first track
+
+    currentIndex = nextIndex;
+    playCurrentFile();
+}
+
+void MainComponent::playButtonClicked()
+{
+    if (state == TransportState::Stopped)
+    {
+        changeState(TransportState::Starting);
+    }
+    else
+    {
+        stopTimer(); // Also cancel any pending auto-advance timer
+        changeState(TransportState::Stopping);
+    }
 }

@@ -37,10 +37,10 @@ MainComponent::MainComponent()
         // Logarithmic range: 1 ms to 3000 ms
         // Using NormalisableRange with a skew factor centred at 100 ms
         juce::NormalisableRange<double> logRange(50.0, 3000.0);
-        logRange.setSkewForCentre(250.0);   // midpoint of the slider = 250 ms
+        logRange.setSkewForCentre(500.0);   // midpoint of the slider = 500 ms
         timerIntervalSlider.setNormalisableRange(logRange);
     }
-    timerIntervalSlider.setValue(250.0);
+    timerIntervalSlider.setValue(500.0);
     timerIntervalSlider.setTextValueSuffix(" ms");
     timerIntervalSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     timerIntervalSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
@@ -74,10 +74,48 @@ MainComponent::MainComponent()
     masterVolumeLabel.setText("Volume:", juce::dontSendNotification);
     masterVolumeLabel.attachToComponent(&masterVolumeSlider, true);
 
+    // --- EQ sliders (±12 dB, default 0 dB) ---
+    auto setupEqSlider = [this](juce::Slider& s, juce::Label& l, const juce::String& name)
+        {
+            addAndMakeVisible(s);
+            s.setRange(-12.0, 12.0, 0.1);
+            s.setValue(0.0);
+            s.setTextValueSuffix(" dB");
+            s.setSliderStyle(juce::Slider::LinearVertical);
+            s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 60, 28);
+            s.onValueChange = [this] { updateEQ(); };
+
+            addAndMakeVisible(l);
+            l.setText(name, juce::dontSendNotification);
+            l.setJustificationType(juce::Justification::centred);
+        };
+
+    setupEqSlider(eqLowSlider, eqLowLabel, "Low\n200Hz");
+    setupEqSlider(eqMidSlider, eqMidLabel, "Mid\n1kHz");
+    setupEqSlider(eqHighSlider, eqHighLabel, "High\n5kHz");
+
+    // --- Reverb sliders ---
+    auto setupReverbSlider = [this](juce::Slider& s, juce::Label& l, const juce::String& name, double defaultVal)
+        {
+            addAndMakeVisible(s);
+            s.setRange(0.0, 1.0, 0.01);
+            s.setValue(defaultVal);
+            s.setSliderStyle(juce::Slider::LinearHorizontal);
+            s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+            s.onValueChange = [this] { updateReverb(); };
+
+            addAndMakeVisible(l);
+            l.setText(name, juce::dontSendNotification);
+            l.attachToComponent(&s, true);
+        };
+
+    setupReverbSlider(reverbRoomSizeSlider, reverbRoomSizeLabel, "Room:", 0.5);
+    setupReverbSlider(reverbWetSlider, reverbWetLabel, "Wet:", 0.0);
+
     // Initialize audio device (stereo output, no input)
     setAudioChannels(0, 2);
 
-    setSize(400, 245);
+    setSize(400, 480);
 }
 
 MainComponent::~MainComponent()
@@ -114,6 +152,21 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
         ch->transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
 
     mixer.prepareToPlay(samplesPerBlockExpected, sampleRate);
+
+    currentSampleRate = sampleRate;
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = (juce::uint32)samplesPerBlockExpected;
+    spec.numChannels = 1;   // Each chain handles one channel
+
+    eqLeft.prepare(spec);
+    eqRight.prepare(spec);
+
+    updateEQ();
+
+    reverb.setSampleRate(sampleRate);
+    updateReverb();
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
@@ -161,6 +214,41 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     bufferToFill.buffer->applyGain(bufferToFill.startSample,
         bufferToFill.numSamples,
         masterVolume.load());
+
+    // Apply 3-band EQ — process left and right channels separately
+    {
+        auto* buffer = bufferToFill.buffer;
+        const int start = bufferToFill.startSample;
+        const int num = bufferToFill.numSamples;
+
+        if (buffer->getNumChannels() >= 1)
+        {
+            juce::dsp::AudioBlock<float> block(buffer->getArrayOfWritePointers(),
+                1, (size_t)start, (size_t)num);
+            juce::dsp::ProcessContextReplacing<float> ctx(block);
+            eqLeft.process(ctx);
+        }
+        if (buffer->getNumChannels() >= 2)
+        {
+            auto* rightPtr = buffer->getArrayOfWritePointers() + 1;
+            juce::dsp::AudioBlock<float> block(rightPtr, 1, (size_t)start, (size_t)num);
+            juce::dsp::ProcessContextReplacing<float> ctx(block);
+            eqRight.process(ctx);
+        }
+    }
+
+    // Apply reverb (stereo) after EQ
+    {
+        auto* buffer = bufferToFill.buffer;
+        const int start = bufferToFill.startSample;
+        const int num = bufferToFill.numSamples;
+
+        if (buffer->getNumChannels() >= 2)
+            reverb.processStereo(buffer->getWritePointer(0, start),
+                buffer->getWritePointer(1, start), num);
+        else if (buffer->getNumChannels() == 1)
+            reverb.processMono(buffer->getWritePointer(0, start), num);
+    }
 }
 
 void MainComponent::releaseResources()
@@ -168,6 +256,10 @@ void MainComponent::releaseResources()
     mixer.releaseResources();
     for (auto* ch : channels)
         ch->transportSource.releaseResources();
+
+    eqLeft.reset();
+    eqRight.reset();
+    reverb.reset();
 }
 
 //==============================================================================
@@ -185,6 +277,26 @@ void MainComponent::resized()
     timerIntervalSlider.setBounds(70, 135, getWidth() - 80, 25);
     randomOrderButton.setBounds(10, 170, getWidth() - 20, 25);
     masterVolumeSlider.setBounds(70, 205, getWidth() - 80, 25);
+
+    // EQ sliders arranged side by side with labels above
+    const int eqTop = 245;
+    const int eqH = 120;
+    const int labelH = 32;
+    const int totalW = getWidth() - 20;
+    const int bandW = totalW / 3;
+
+    eqLowLabel.setBounds(10, eqTop, bandW, labelH);
+    eqMidLabel.setBounds(10 + bandW, eqTop, bandW, labelH);
+    eqHighLabel.setBounds(10 + bandW * 2, eqTop, bandW, labelH);
+
+    eqLowSlider.setBounds(10, eqTop + labelH, bandW, eqH);
+    eqMidSlider.setBounds(10 + bandW, eqTop + labelH, bandW, eqH);
+    eqHighSlider.setBounds(10 + bandW * 2, eqTop + labelH, bandW, eqH);
+
+    // Reverb sliders below EQ
+    const int revTop = eqTop + labelH + eqH + 10;
+    reverbRoomSizeSlider.setBounds(70, revTop, getWidth() - 80, 25);
+    reverbWetSlider.setBounds(70, revTop + 35, getWidth() - 80, 25);
 }
 
 //==============================================================================
@@ -253,7 +365,7 @@ void MainComponent::selectFolder()
 {
     chooser = std::make_unique<juce::FileChooser>(
         "Select a folder containing MP3 files...",
-        juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
+        juce::File("E:\\Sounds\\SoundZapper"),
         ""
     );
 
@@ -379,6 +491,44 @@ void MainComponent::playNext()
 
     currentIndex = nextIndex;
     play();
+}
+
+//==============================================================================
+void MainComponent::updateEQ()
+{
+    // Called on the message thread; coefficients are swapped atomically by JUCE
+    const double sr = currentSampleRate;
+
+    // Low shelf  ~200 Hz
+    *eqLeft.get<0>().coefficients =
+        *FilterCoefs::makeLowShelf(sr, 200.0, 0.707, juce::Decibels::decibelsToGain((float)eqLowSlider.getValue()));
+    *eqRight.get<0>().coefficients =
+        *FilterCoefs::makeLowShelf(sr, 200.0, 0.707, juce::Decibels::decibelsToGain((float)eqLowSlider.getValue()));
+
+    // Mid peak  ~1 kHz
+    *eqLeft.get<1>().coefficients =
+        *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
+    *eqRight.get<1>().coefficients =
+        *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
+
+    // High shelf ~5 kHz
+    *eqLeft.get<2>().coefficients =
+        *FilterCoefs::makeHighShelf(sr, 5000.0, 0.707, juce::Decibels::decibelsToGain((float)eqHighSlider.getValue()));
+    *eqRight.get<2>().coefficients =
+        *FilterCoefs::makeHighShelf(sr, 5000.0, 0.707, juce::Decibels::decibelsToGain((float)eqHighSlider.getValue()));
+}
+
+//==============================================================================
+void MainComponent::updateReverb()
+{
+    juce::Reverb::Parameters params;
+    params.roomSize = (float)reverbRoomSizeSlider.getValue();
+    params.wetLevel = (float)reverbWetSlider.getValue();
+    params.dryLevel = 1.0f - params.wetLevel;  // Dry fades as wet increases
+    params.damping = 0.5f;
+    params.width = 1.0f;
+    params.freezeMode = 0.0f;
+    reverb.setParameters(params);
 }
 
 void MainComponent::playButtonClicked()

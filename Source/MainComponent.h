@@ -60,6 +60,9 @@ private:
     void playButtonClicked();
     void randomisePan(int ch);   // Assign a random pan to one channel
 
+    void updateEQ();      // Rebuild IIR coefficients from slider values
+    void updateReverb();  // Update reverb parameters from slider values
+
     //==========================================================================
     // --- UI ---
     juce::TextButton openButton;
@@ -74,6 +77,20 @@ private:
 
     juce::Slider        masterVolumeSlider;     // Master volume (0.0 to 1.0)
     juce::Label         masterVolumeLabel;      // "Volume:" label
+
+    // --- EQ sliders (±12 dB) ---
+    juce::Slider  eqLowSlider;       // Low shelf  (~200 Hz)
+    juce::Slider  eqMidSlider;       // Peak       (~1 kHz)
+    juce::Slider  eqHighSlider;      // High shelf (~5 kHz)
+    juce::Label   eqLowLabel;
+    juce::Label   eqMidLabel;
+    juce::Label   eqHighLabel;
+
+    // --- Reverb sliders ---
+    juce::Slider  reverbRoomSizeSlider;  // Room size  (0.0 to 1.0)
+    juce::Slider  reverbWetSlider;       // Wet level  (0.0 to 1.0)
+    juce::Label   reverbRoomSizeLabel;
+    juce::Label   reverbWetLabel;
 
     std::unique_ptr<juce::FileChooser> chooser;
 
@@ -97,6 +114,20 @@ private:
 
     // Master volume applied in getNextAudioBlock (atomic for thread safety)
     std::atomic<float> masterVolume{ 1.0f };
+
+    // --- 3-band EQ (Low shelf / Mid peak / High shelf) ---
+    // One stereo processor chain: L and R filters run in parallel
+    using Filter = juce::dsp::IIR::Filter<float>;
+    using FilterCoefs = juce::dsp::IIR::Coefficients<float>;
+    using EqChain = juce::dsp::ProcessorChain<Filter, Filter, Filter>;
+
+    EqChain eqLeft;   // Processes the left  channel
+    EqChain eqRight;  // Processes the right channel
+
+    double currentSampleRate{ 44100.0 };
+
+    // --- Reverb (applied after EQ, stereo) ---
+    juce::Reverb reverb;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

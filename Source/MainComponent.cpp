@@ -59,10 +59,25 @@ MainComponent::MainComponent()
             useRandomOrder = randomOrderButton.getToggleState();
         };
 
+    // Master volume slider (0.0 to 1.0, default 1.0)
+    addAndMakeVisible(&masterVolumeSlider);
+    masterVolumeSlider.setRange(0.0, 1.0, 0.01);
+    masterVolumeSlider.setValue(0.5);
+    masterVolumeSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    masterVolumeSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    masterVolumeSlider.onValueChange = [this]
+        {
+            masterVolume.store((float)masterVolumeSlider.getValue());
+        };
+
+    addAndMakeVisible(&masterVolumeLabel);
+    masterVolumeLabel.setText("Volume:", juce::dontSendNotification);
+    masterVolumeLabel.attachToComponent(&masterVolumeSlider, true);
+
     // Initialize audio device (stereo output, no input)
     setAudioChannels(0, 2);
 
-    setSize(400, 210);
+    setSize(400, 245);
 }
 
 MainComponent::~MainComponent()
@@ -141,6 +156,11 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                 bufferToFill.numSamples);
         }
     }
+
+    // Apply master volume to the final mixed output
+    bufferToFill.buffer->applyGain(bufferToFill.startSample,
+        bufferToFill.numSamples,
+        masterVolume.load());
 }
 
 void MainComponent::releaseResources()
@@ -161,9 +181,10 @@ void MainComponent::resized()
     openButton.setBounds(10, 10, getWidth() - 20, 30);
     playButton.setBounds(10, 50, getWidth() - 20, 30);
     currentPositionLabel.setBounds(10, 100, getWidth() - 20, 25);
-    // Label is attached to the slider via attachToComponent; only lay out the slider
+    // Labels are attached via attachToComponent; only lay out the sliders
     timerIntervalSlider.setBounds(70, 135, getWidth() - 80, 25);
     randomOrderButton.setBounds(10, 170, getWidth() - 20, 25);
+    masterVolumeSlider.setBounds(70, 205, getWidth() - 80, 25);
 }
 
 //==============================================================================

@@ -72,6 +72,9 @@ private:
     juce::ToggleButton  randomOrderButton;      // Switch between sequential and random order
     bool                useRandomOrder{ false };
 
+    juce::Slider        masterVolumeSlider;     // Master volume (0.0 to 1.0)
+    juce::Label         masterVolumeLabel;      // "Volume:" label
+
     std::unique_ptr<juce::FileChooser> chooser;
 
     // --- Audio pipeline ---
@@ -91,6 +94,9 @@ private:
     int                     currentIndex{ -1 };
 
     juce::Random random;
+
+    // Master volume applied in getNextAudioBlock (atomic for thread safety)
+    std::atomic<float> masterVolume{ 1.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

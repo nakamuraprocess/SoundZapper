@@ -1,4 +1,4 @@
-#include "MainComponent.h"
+﻿#include "MainComponent.h"
 
 //==============================================================================
 MainComponent::MainComponent()
@@ -6,7 +6,13 @@ MainComponent::MainComponent()
 {
     // Register common audio formats such as MP3
     formatManager.registerBasicFormats();
-    transportSource.addChangeListener(this);
+
+    // Create NUM_CHANNELS transport channels and register change listeners
+    for (int i = 0; i < NUM_CHANNELS; ++i)
+    {
+        auto* ch = channels.add(new PlayChannel());
+        ch->transportSource.addChangeListener(this);
+    }
 
     // [Open Folder] button
     addAndMakeVisible(&openButton);
@@ -20,62 +26,128 @@ MainComponent::MainComponent()
     playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::green);
     playButton.setEnabled(false);
 
-    // Label showing the current file name
+    // Label showing track progress
     addAndMakeVisible(&currentPositionLabel);
     currentPositionLabel.setText("", juce::dontSendNotification);
+
+
+    // Slider controlling the delay between tracks (ms) — logarithmic scale
+    addAndMakeVisible(&timerIntervalSlider);
+    {
+        // Logarithmic range: 1 ms to 3000 ms
+        // Using NormalisableRange with a skew factor centred at 100 ms
+        juce::NormalisableRange<double> logRange(50.0, 3000.0);
+        logRange.setSkewForCentre(250.0);   // midpoint of the slider = 250 ms
+        timerIntervalSlider.setNormalisableRange(logRange);
+    }
+    timerIntervalSlider.setValue(250.0);
+    timerIntervalSlider.setTextValueSuffix(" ms");
+    timerIntervalSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    timerIntervalSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
+    timerIntervalSlider.setNumDecimalPlacesToDisplay(0);  // Round to nearest integer
+
+    addAndMakeVisible(&timerIntervalLabel);
+    timerIntervalLabel.setText("Interval:", juce::dontSendNotification);
+    timerIntervalLabel.attachToComponent(&timerIntervalSlider, true);
+
+    // Toggle between sequential and random track order
+    addAndMakeVisible(&randomOrderButton);
+    randomOrderButton.setButtonText("Random Order");
+    randomOrderButton.setToggleState(false, juce::dontSendNotification);
+    randomOrderButton.onClick = [this]
+        {
+            useRandomOrder = randomOrderButton.getToggleState();
+        };
 
     // Initialize audio device (stereo output, no input)
     setAudioChannels(0, 2);
 
-    setSize(400, 200);
+    setSize(400, 210);
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
+
+    // Detach all sources from the mixer before shutting down
+    mixer.removeAllInputs();
+    for (auto* ch : channels)
+        ch->transportSource.setSource(nullptr);
+
     shutdownAudio();
 }
 
 //==============================================================================
 // Timer callback:
-//   Called when the transport stops naturally (track finished) to load and start the next file.
+//   Fires 100 ms after a track finishes naturally; advances to the next file.
 void MainComponent::timerCallback()
 {
-    // Advance to the next file
     playNext();
 
     if (currentIndex >= 0 && currentIndex < playlist.size())
     {
-        // Update the label
         currentPositionLabel.setText(
             juce::String(currentIndex + 1) + " / " + juce::String(playlist.size()),
             juce::dontSendNotification);
-
-        // Rewind to the beginning and start playback
-        transportSource.setPosition(0.0);
-        changeState(TransportState::Starting);
     }
 }
 
 //==============================================================================
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
-    transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    for (auto* ch : channels)
+        ch->transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+
+    mixer.prepareToPlay(samplesPerBlockExpected, sampleRate);
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    if (readerSource.get() == nullptr)
+    // Clear first; the mixer will accumulate all active channels into a temp buffer.
+    bufferToFill.clearActiveBufferRegion();
+
+    // Process each channel independently so we can apply its own pan.
+    juce::AudioBuffer<float> channelBuf(bufferToFill.buffer->getNumChannels(),
+        bufferToFill.numSamples);
+
+    for (auto* ch : channels)
     {
-        bufferToFill.clearActiveBufferRegion();
-        return;
+        if (ch->readerSource.get() == nullptr)
+            continue;
+
+        channelBuf.clear();
+
+        // Fill channelBuf from this transport source
+        juce::AudioSourceChannelInfo info(&channelBuf, 0, bufferToFill.numSamples);
+        ch->transportSource.getNextAudioBlock(info);
+
+        // --- Equal-power panning for this channel ---
+        // pan: -1.0 (full left) .. 0.0 (centre) .. +1.0 (full right)
+        const float p = ch->pan.load();
+        const float angle = (p + 1.0f) * juce::MathConstants<float>::halfPi / 2.0f;
+        const float gainLeft = std::cos(angle);
+        const float gainRight = std::sin(angle);
+
+        if (channelBuf.getNumChannels() >= 1)
+            channelBuf.applyGain(0, 0, bufferToFill.numSamples, gainLeft);
+        if (channelBuf.getNumChannels() >= 2)
+            channelBuf.applyGain(1, 0, bufferToFill.numSamples, gainRight);
+
+        // Accumulate into the output buffer
+        for (int c = 0; c < bufferToFill.buffer->getNumChannels(); ++c)
+        {
+            bufferToFill.buffer->addFrom(c, bufferToFill.startSample,
+                channelBuf, c, 0,
+                bufferToFill.numSamples);
+        }
     }
-    transportSource.getNextAudioBlock(bufferToFill);
 }
 
 void MainComponent::releaseResources()
 {
-    transportSource.releaseResources();
+    mixer.releaseResources();
+    for (auto* ch : channels)
+        ch->transportSource.releaseResources();
 }
 
 //==============================================================================
@@ -89,14 +161,20 @@ void MainComponent::resized()
     openButton.setBounds(10, 10, getWidth() - 20, 30);
     playButton.setBounds(10, 50, getWidth() - 20, 30);
     currentPositionLabel.setBounds(10, 100, getWidth() - 20, 25);
+    // Label is attached to the slider via attachToComponent; only lay out the slider
+    timerIntervalSlider.setBounds(70, 135, getWidth() - 80, 25);
+    randomOrderButton.setBounds(10, 170, getWidth() - 20, 25);
 }
 
 //==============================================================================
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
-    if (source == &transportSource)
+    for (auto* ch : channels)
     {
-        if (transportSource.isPlaying())
+        if (source != &ch->transportSource)
+            continue;
+
+        if (ch->transportSource.isPlaying())
         {
             changeState(TransportState::Playing);
         }
@@ -104,44 +182,48 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
         {
             if (state == TransportState::Playing)
             {
-                // Track finished naturally
-                changeState(TransportState::Stopped);
+                // This channel finished naturally -> schedule next file
+                startTimer((int)timerIntervalSlider.getValue());
             }
             else if (state == TransportState::Stopping)
             {
-                // User pressed Stop -> just halt, do not start the timer
+                // User pressed Stop
                 changeState(TransportState::Stopped);
             }
         }
+        break;
     }
 }
 
 //==============================================================================
 void MainComponent::changeState(TransportState newState)
 {
-    if (state != newState)
+    if (state == newState)
+        return;
+
+    state = newState;
+
+    switch (state)
     {
-        state = newState;
+    case TransportState::Stopped:
+        playButton.setButtonText("Play");
+        playButton.setEnabled(true);
+        break;
 
-        switch (state)
-        {
-        case TransportState::Stopped:
-            playButton.setButtonText("Play");
-            playButton.setEnabled(true);
-            break;
+    case TransportState::Starting:
+        // Start the channel that was just loaded in play()
+        channels[nextChannel == 0 ? NUM_CHANNELS - 1 : nextChannel - 1]
+            ->transportSource.start();
+        break;
 
-        case TransportState::Starting:
-            transportSource.start();
-            break;
+    case TransportState::Playing:
+        playButton.setButtonText("Stop");
+        break;
 
-        case TransportState::Playing:
-            playButton.setButtonText("Stop");
-            break;
-
-        case TransportState::Stopping:
-            transportSource.stop();
-            break;
-        }
+    case TransportState::Stopping:
+        for (auto* ch : channels)
+            ch->transportSource.stop();
+        break;
     }
 }
 
@@ -150,7 +232,7 @@ void MainComponent::selectFolder()
 {
     chooser = std::make_unique<juce::FileChooser>(
         "Select a folder containing MP3 files...",
-        juce::File::getCurrentWorkingDirectory(),
+        juce::File::getSpecialLocation(juce::File::userDesktopDirectory),
         ""
     );
 
@@ -160,19 +242,18 @@ void MainComponent::selectFolder()
     chooser->launchAsync(chooserFlags, [this](const juce::FileChooser& fc)
         {
             auto folder = fc.getResult();
+            if (folder == juce::File{} || !folder.isDirectory())
+                return;
 
-            if (folder != juce::File{} && folder.isDirectory())
+            currentFolder = folder;
+            loadPlaylistFromFolder(currentFolder);
+
+            if (!playlist.isEmpty())
             {
-                currentFolder = folder;
-                loadPlaylistFromFolder(currentFolder);
-
-                if (!playlist.isEmpty())
-                {
-                    currentIndex = 0;
-                    currentPositionLabel.setText(
-                        "1 / " + juce::String(playlist.size()),
-                        juce::dontSendNotification);
-                }
+                currentIndex = 0;
+                currentPositionLabel.setText(
+                    "1 / " + juce::String(playlist.size()),
+                    juce::dontSendNotification);
             }
         });
 }
@@ -203,18 +284,50 @@ void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
 
 void MainComponent::play()
 {
-    startTimer(200);
+    startTimer((int)timerIntervalSlider.getValue());
     if (currentIndex < 0 || currentIndex >= playlist.size())
         return;
 
+    // Pick the next channel in round-robin order
+    const int targetCh = nextChannel;
+    nextChannel = (nextChannel + 1) % NUM_CHANNELS;
+
+    auto* ch = channels[targetCh];
+
+    // Randomise pan for this channel
+    randomisePan(targetCh);
+
     auto file = playlist[currentIndex];
     auto* reader = formatManager.createReaderFor(file);
+    if (reader == nullptr)
+        return;
 
-    if (reader != nullptr)
+    ch->transportSource.setSource(nullptr);   // detach old source first
+    auto newSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
+    ch->transportSource.setSource(newSource.get(), 0, nullptr, reader->sampleRate);
+    ch->readerSource = std::move(newSource);
+
+    ch->transportSource.setPosition(0.0);
+    ch->transportSource.start();
+
+    DBG("play(): track " + juce::String(currentIndex + 1)
+        + " -> Ch" + juce::String(targetCh + 1)
+        + "  pan=" + juce::String(ch->pan.load(), 2));
+}
+
+void MainComponent::randomisePan(int ch)
+{
+    const float newPan = random.nextFloat() * 2.0f - 1.0f; // [-1.0, +1.0]
+    channels[ch]->pan.store(newPan);
+
+    // Rebuild the pan label showing all channels
+    juce::String text;
+    for (int i = 0; i < NUM_CHANNELS; ++i)
     {
-        auto newSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
-        transportSource.setSource(newSource.get(), 0, nullptr, reader->sampleRate);
-        readerSource = std::move(newSource);
+        const float p = channels[i]->pan.load();
+        juce::String side = (p < -0.05f) ? "L" : (p > 0.05f) ? "R" : "C";
+        text += "Ch" + juce::String(i + 1) + ":" + side + juce::String(p, 2);
+        if (i < NUM_CHANNELS - 1) text += "  ";
     }
 }
 
@@ -223,9 +336,25 @@ void MainComponent::playNext()
     if (playlist.isEmpty())
         return;
 
-    int nextIndex = currentIndex + 1;
-    if (nextIndex >= playlist.size())
-        nextIndex = 0; // Wrap around to the first track
+    int nextIndex;
+    if (useRandomOrder)
+    {
+        // Pick a random track (avoid repeating the current one if possible)
+        if (playlist.size() > 1)
+        {
+            do { nextIndex = random.nextInt(playlist.size()); } while (nextIndex == currentIndex);
+        }
+        else
+        {
+            nextIndex = 0;
+        }
+    }
+    else
+    {
+        nextIndex = currentIndex + 1;
+        if (nextIndex >= playlist.size())
+            nextIndex = 0; // Wrap around to the first track
+    }
 
     currentIndex = nextIndex;
     play();
@@ -236,11 +365,11 @@ void MainComponent::playButtonClicked()
     if (state == TransportState::Stopped)
     {
         play();
-        changeState(TransportState::Starting);
+        changeState(TransportState::Playing); // already started in play()
     }
     else
     {
-        stopTimer(); // Also cancel any pending auto-advance timer
+        stopTimer();
         changeState(TransportState::Stopping);
     }
 }

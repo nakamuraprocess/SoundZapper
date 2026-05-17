@@ -4,15 +4,7 @@
 MainComponent::MainComponent()
     : state(TransportState::Stopped)
 {
-    // Register common audio formats such as MP3
     formatManager.registerBasicFormats();
-
-    // Create NUM_CHANNELS transport channels and register change listeners
-    for (int i = 0; i < NUM_CHANNELS; ++i)
-    {
-        auto* ch = channels.add(new PlayChannel());
-        ch->transportSource.addChangeListener(this);
-    }
 
     // [Open Folder] button
     addAndMakeVisible(&openButton);
@@ -26,31 +18,27 @@ MainComponent::MainComponent()
     playButton.setColour(juce::TextButton::buttonColourId, juce::Colours::green);
     playButton.setEnabled(false);
 
-    // Label showing track progress
     addAndMakeVisible(&currentPositionLabel);
     currentPositionLabel.setText("", juce::dontSendNotification);
 
-
-    // Slider controlling the delay between tracks (ms) — logarithmic scale
+    // Interval slider (logarithmic, 50-3000 ms)
     addAndMakeVisible(&timerIntervalSlider);
     {
-        // Logarithmic range: 1 ms to 3000 ms
-        // Using NormalisableRange with a skew factor centred at 100 ms
         juce::NormalisableRange<double> logRange(50.0, 3000.0);
-        logRange.setSkewForCentre(500.0);   // midpoint of the slider = 500 ms
+        logRange.setSkewForCentre(500.0);
         timerIntervalSlider.setNormalisableRange(logRange);
     }
     timerIntervalSlider.setValue(500.0);
     timerIntervalSlider.setTextValueSuffix(" ms");
     timerIntervalSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     timerIntervalSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
-    timerIntervalSlider.setNumDecimalPlacesToDisplay(0);  // Round to nearest integer
+    timerIntervalSlider.setNumDecimalPlacesToDisplay(0);
 
     addAndMakeVisible(&timerIntervalLabel);
     timerIntervalLabel.setText("Interval:", juce::dontSendNotification);
     timerIntervalLabel.attachToComponent(&timerIntervalSlider, true);
 
-    // Toggle between sequential and random track order
+    // Random order toggle
     addAndMakeVisible(&randomOrderButton);
     randomOrderButton.setButtonText("Random Order");
     randomOrderButton.setToggleState(false, juce::dontSendNotification);
@@ -59,7 +47,7 @@ MainComponent::MainComponent()
             useRandomOrder = randomOrderButton.getToggleState();
         };
 
-    // Master volume slider (0.0 to 1.0, default 1.0)
+    // Master volume slider
     addAndMakeVisible(&masterVolumeSlider);
     masterVolumeSlider.setRange(0.0, 1.0, 0.01);
     masterVolumeSlider.setValue(0.5);
@@ -74,7 +62,7 @@ MainComponent::MainComponent()
     masterVolumeLabel.setText("Volume:", juce::dontSendNotification);
     masterVolumeLabel.attachToComponent(&masterVolumeSlider, true);
 
-    // --- EQ sliders (±12 dB, default 0 dB) ---
+    // EQ sliders (±12 dB)
     auto setupEqSlider = [this](juce::Slider& s, juce::Label& l, const juce::String& name)
         {
             addAndMakeVisible(s);
@@ -94,47 +82,139 @@ MainComponent::MainComponent()
     setupEqSlider(eqMidSlider, eqMidLabel, "Mid\n1kHz");
     setupEqSlider(eqHighSlider, eqHighLabel, "High\n5kHz");
 
-    // --- Reverb sliders ---
-    auto setupReverbSlider = [this](juce::Slider& s, juce::Label& l, const juce::String& name, double defaultVal)
+    // Reverb sliders
+    // Reverb range sliders: random value is chosen per channel within [min, max]
+    auto setupRevPair = [this](juce::Slider& minS, juce::Label& minL,
+        juce::Slider& maxS, juce::Label& maxL,
+        double defaultMin, double defaultMax)
         {
-            addAndMakeVisible(s);
-            s.setRange(0.0, 1.0, 0.01);
-            s.setValue(defaultVal);
-            s.setSliderStyle(juce::Slider::LinearHorizontal);
-            s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-            s.onValueChange = [this] { updateReverb(); };
-
-            addAndMakeVisible(l);
-            l.setText(name, juce::dontSendNotification);
-            l.attachToComponent(&s, true);
+            auto init = [this](juce::Slider& s, double val)
+                {
+                    addAndMakeVisible(s);
+                    s.setRange(0.0, 1.0, 0.01);
+                    s.setValue(val);
+                    s.setSliderStyle(juce::Slider::LinearHorizontal);
+                    s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 45, 20);
+                };
+            init(minS, defaultMin);
+            init(maxS, defaultMax);
+            // Constrain: min <= max
+            minS.onValueChange = [&minS, &maxS] {
+                if (minS.getValue() > maxS.getValue())
+                    maxS.setValue(minS.getValue(), juce::dontSendNotification);
+                };
+            maxS.onValueChange = [&minS, &maxS] {
+                if (maxS.getValue() < minS.getValue())
+                    minS.setValue(maxS.getValue(), juce::dontSendNotification);
+                };
+            addAndMakeVisible(minL);
+            minL.setText("Min", juce::dontSendNotification);
+            minL.setJustificationType(juce::Justification::centred);
+            addAndMakeVisible(maxL);
+            maxL.setText("Max", juce::dontSendNotification);
+            maxL.setJustificationType(juce::Justification::centred);
         };
 
-    setupReverbSlider(reverbRoomSizeSlider, reverbRoomSizeLabel, "Room:", 0.5);
-    setupReverbSlider(reverbWetSlider, reverbWetLabel, "Wet:", 0.0);
+    addAndMakeVisible(reverbRoomSizeLabel);
+    reverbRoomSizeLabel.setText("Room:", juce::dontSendNotification);
+    setupRevPair(reverbRoomSizeMinSlider, reverbRoomSizeMinLabel,
+        reverbRoomSizeMaxSlider, reverbRoomSizeMaxLabel, 0.2, 0.9);
 
-    // Initialize audio device (stereo output, no input)
+    addAndMakeVisible(reverbWetLabel);
+    reverbWetLabel.setText("Wet:", juce::dontSendNotification);
+    setupRevPair(reverbWetMinSlider, reverbWetMinLabel,
+        reverbWetMaxSlider, reverbWetMaxLabel, 0.1, 0.6);
+
+    // Reverb probability slider (0-100%)
+    addAndMakeVisible(reverbProbabilitySlider);
+    reverbProbabilitySlider.setRange(0.0, 100.0, 1.0);
+    reverbProbabilitySlider.setValue(50.0);
+    reverbProbabilitySlider.setTextValueSuffix(" %");
+    reverbProbabilitySlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    reverbProbabilitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    reverbProbabilitySlider.setNumDecimalPlacesToDisplay(0);
+
+    addAndMakeVisible(reverbProbabilityLabel);
+    reverbProbabilityLabel.setText("Rev Prob:", juce::dontSendNotification);
+    reverbProbabilityLabel.attachToComponent(&reverbProbabilitySlider, true);
+
+    auto setupSectionTitle = [this](juce::Label& l, const juce::String& text)
+        {
+            addAndMakeVisible(l);
+            l.setText(text, juce::dontSendNotification);
+            l.setFont(juce::Font(15.0f, juce::Font::bold));
+            l.setColour(juce::Label::textColourId, juce::Colours::lightblue);
+        };
+
+    setupSectionTitle(sectionPlaybackTitle, "Playback");
+    setupSectionTitle(sectionReverbTitle,   "Reverb");
+    setupSectionTitle(sectionEqTitle,       "Equalizer");
+
     setAudioChannels(0, 2);
-
-    setSize(400, 480);
+    setSize(400, 615);
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
 
-    // Detach all sources from the mixer before shutting down
-    mixer.removeAllInputs();
-    for (auto* ch : channels)
-        ch->transportSource.setSource(nullptr);
+    // Detach sources from mixer, then shut down audio before deleting channels
+    {
+        juce::ScopedLock sl(channelsLock);
+        mixer.removeAllInputs();
+        for (auto* ch : channels)
+            ch->transportSource.setSource(nullptr);
+    }
 
-    shutdownAudio();
+    shutdownAudio(); // Waits for audio thread to finish — safe now that sources are detached
 }
 
 //==============================================================================
-// Timer callback:
-//   Fires 100 ms after a track finishes naturally; advances to the next file.
+PlayChannel* MainComponent::createChannel()
+{
+    juce::ScopedLock sl(channelsLock);
+
+    if (channels.size() >= MAX_CHANNELS)
+    {
+        DBG("createChannel: MAX_CHANNELS reached (" + juce::String(MAX_CHANNELS) + ")");
+        return nullptr;
+    }
+
+    auto* ch = channels.add(new PlayChannel());
+    ch->transportSource.addChangeListener(this);
+    ch->transportSource.prepareToPlay(currentBlockSize, currentSampleRate);
+    ch->reverb.setSampleRate(currentSampleRate);
+    mixer.addInputSource(&ch->transportSource, false);
+
+    DBG("createChannel: active=" + juce::String(channels.size()));
+    return ch;
+}
+
+void MainComponent::removeFinishedChannels()
+{
+    // Must be called on the message thread only.
+    juce::ScopedLock sl(channelsLock);
+
+    for (int i = channels.size() - 1; i >= 0; --i)
+    {
+        auto* ch = channels[i];
+        if (!ch->transportSource.isPlaying())
+        {
+            mixer.removeInputSource(&ch->transportSource);
+            ch->transportSource.setSource(nullptr);
+            channels.remove(i, true); // true = delete the object
+        }
+    }
+
+    DBG("removeFinishedChannels: active=" + juce::String(channels.size()));
+}
+
+//==============================================================================
 void MainComponent::timerCallback()
 {
+    // Remove channels that finished naturally before adding a new one
+    removeFinishedChannels();
+
     playNext();
 
     if (currentIndex >= 0 && currentIndex < playlist.size())
@@ -148,74 +228,75 @@ void MainComponent::timerCallback()
 //==============================================================================
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
-    for (auto* ch : channels)
-        ch->transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    currentSampleRate = sampleRate;
+    currentBlockSize = samplesPerBlockExpected;
 
     mixer.prepareToPlay(samplesPerBlockExpected, sampleRate);
-
-    currentSampleRate = sampleRate;
 
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate;
     spec.maximumBlockSize = (juce::uint32)samplesPerBlockExpected;
-    spec.numChannels = 1;   // Each chain handles one channel
+    spec.numChannels = 1;
 
     eqLeft.prepare(spec);
     eqRight.prepare(spec);
-
     updateEQ();
 
-    reverb.setSampleRate(sampleRate);
-    updateReverb();
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    // Clear first; the mixer will accumulate all active channels into a temp buffer.
     bufferToFill.clearActiveBufferRegion();
 
-    // Process each channel independently so we can apply its own pan.
+    // Process each active channel independently for per-channel pan
     juce::AudioBuffer<float> channelBuf(bufferToFill.buffer->getNumChannels(),
         bufferToFill.numSamples);
-
-    for (auto* ch : channels)
     {
-        if (ch->readerSource.get() == nullptr)
-            continue;
+        juce::ScopedLock sl(channelsLock);
 
-        channelBuf.clear();
-
-        // Fill channelBuf from this transport source
-        juce::AudioSourceChannelInfo info(&channelBuf, 0, bufferToFill.numSamples);
-        ch->transportSource.getNextAudioBlock(info);
-
-        // --- Equal-power panning for this channel ---
-        // pan: -1.0 (full left) .. 0.0 (centre) .. +1.0 (full right)
-        const float p = ch->pan.load();
-        const float angle = (p + 1.0f) * juce::MathConstants<float>::halfPi / 2.0f;
-        const float gainLeft = std::cos(angle);
-        const float gainRight = std::sin(angle);
-
-        if (channelBuf.getNumChannels() >= 1)
-            channelBuf.applyGain(0, 0, bufferToFill.numSamples, gainLeft);
-        if (channelBuf.getNumChannels() >= 2)
-            channelBuf.applyGain(1, 0, bufferToFill.numSamples, gainRight);
-
-        // Accumulate into the output buffer
-        for (int c = 0; c < bufferToFill.buffer->getNumChannels(); ++c)
+        for (auto* ch : channels)
         {
-            bufferToFill.buffer->addFrom(c, bufferToFill.startSample,
-                channelBuf, c, 0,
-                bufferToFill.numSamples);
+            if (ch->readerSource.get() == nullptr)
+                continue;
+
+            channelBuf.clear();
+
+            juce::AudioSourceChannelInfo info(&channelBuf, 0, bufferToFill.numSamples);
+            ch->transportSource.getNextAudioBlock(info);
+
+            // Per-channel reverb
+            if (channelBuf.getNumChannels() >= 2)
+                ch->reverb.processStereo(channelBuf.getWritePointer(0),
+                    channelBuf.getWritePointer(1),
+                    bufferToFill.numSamples);
+            else if (channelBuf.getNumChannels() == 1)
+                ch->reverb.processMono(channelBuf.getWritePointer(0),
+                    bufferToFill.numSamples);
+
+            // Equal-power panning
+            const float p = ch->pan.load();
+            const float angle = (p + 1.0f) * juce::MathConstants<float>::halfPi / 2.0f;
+            const float gainLeft = std::cos(angle);
+            const float gainRight = std::sin(angle);
+
+            if (channelBuf.getNumChannels() >= 1)
+                channelBuf.applyGain(0, 0, bufferToFill.numSamples, gainLeft);
+            if (channelBuf.getNumChannels() >= 2)
+                channelBuf.applyGain(1, 0, bufferToFill.numSamples, gainRight);
+
+            for (int c = 0; c < bufferToFill.buffer->getNumChannels(); ++c)
+                bufferToFill.buffer->addFrom(c, bufferToFill.startSample,
+                    channelBuf, c, 0,
+                    bufferToFill.numSamples);
         }
     }
 
-    // Apply master volume to the final mixed output
+    // Master volume
     bufferToFill.buffer->applyGain(bufferToFill.startSample,
         bufferToFill.numSamples,
         masterVolume.load());
 
-    // Apply 3-band EQ — process left and right channels separately
+    // 3-band EQ
     {
         auto* buffer = bufferToFill.buffer;
         const int start = bufferToFill.startSample;
@@ -237,90 +318,108 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         }
     }
 
-    // Apply reverb (stereo) after EQ
-    {
-        auto* buffer = bufferToFill.buffer;
-        const int start = bufferToFill.startSample;
-        const int num = bufferToFill.numSamples;
-
-        if (buffer->getNumChannels() >= 2)
-            reverb.processStereo(buffer->getWritePointer(0, start),
-                buffer->getWritePointer(1, start), num);
-        else if (buffer->getNumChannels() == 1)
-            reverb.processMono(buffer->getWritePointer(0, start), num);
-    }
 }
 
 void MainComponent::releaseResources()
 {
+    juce::ScopedLock sl(channelsLock);
     mixer.releaseResources();
     for (auto* ch : channels)
         ch->transportSource.releaseResources();
 
     eqLeft.reset();
     eqRight.reset();
-    reverb.reset();
 }
 
 //==============================================================================
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId));
+
+    g.setColour(juce::Colours::grey.withAlpha(0.6f));
+    auto drawSep = [&](const juce::Label& titleLabel)
+        {
+            int y = titleLabel.getY() - 5;
+            g.drawHorizontalLine(y, 10.0f, (float)(getWidth() - 10));
+        };
+    drawSep(sectionReverbTitle);
+    drawSep(sectionEqTitle);
 }
 
 void MainComponent::resized()
 {
-    openButton.setBounds(10, 10, getWidth() - 20, 30);
-    playButton.setBounds(10, 50, getWidth() - 20, 30);
-    currentPositionLabel.setBounds(10, 100, getWidth() - 20, 25);
-    // Labels are attached via attachToComponent; only lay out the sliders
-    timerIntervalSlider.setBounds(70, 135, getWidth() - 80, 25);
-    randomOrderButton.setBounds(10, 170, getWidth() - 20, 25);
-    masterVolumeSlider.setBounds(70, 205, getWidth() - 80, 25);
+    const int titleH = 22;
+    const int margin = 10;
 
-    // EQ sliders arranged side by side with labels above
-    const int eqTop = 245;
-    const int eqH = 120;
+    // --- Playback section ---
+    sectionPlaybackTitle.setBounds(margin, 10, getWidth() - margin * 2, titleH);
+    openButton            .setBounds(margin, 37,  getWidth() - margin * 2, 30);
+    playButton            .setBounds(margin, 77,  getWidth() - margin * 2, 30);
+    currentPositionLabel  .setBounds(margin, 117, getWidth() - margin * 2, 25);
+    timerIntervalSlider   .setBounds(70,     152, getWidth() - 80, 25);
+    randomOrderButton     .setBounds(margin, 187, getWidth() - margin * 2, 25);
+    masterVolumeSlider    .setBounds(70,     222, getWidth() - 80, 25);
+
+    // --- Reverb section ---
+    sectionReverbTitle.setBounds(margin, 257, getWidth() - margin * 2, titleH);
+
+    const int revTop = 284;
+    const int halfW  = (getWidth() - 80) / 2;
+    const int sliderX = 55;
+    const int tbW    = 45;
+    const int subLH  = 18;
+    const int rowStep = subLH + 25 + 8;
+
+    reverbRoomSizeLabel   .setBounds(margin,                        revTop + subLH,          45,    25);
+    reverbRoomSizeMinLabel.setBounds(sliderX + halfW - tbW,         revTop,                  tbW,   subLH);
+    reverbRoomSizeMaxLabel.setBounds(sliderX + halfW * 2 - tbW,     revTop,                  tbW,   subLH);
+    reverbRoomSizeMinSlider.setBounds(sliderX,                      revTop + subLH,          halfW, 25);
+    reverbRoomSizeMaxSlider.setBounds(sliderX + halfW,              revTop + subLH,          halfW, 25);
+
+    reverbWetLabel        .setBounds(margin,                        revTop + rowStep + subLH, 45,    25);
+    reverbWetMinLabel     .setBounds(sliderX + halfW - tbW,         revTop + rowStep,         tbW,   subLH);
+    reverbWetMaxLabel     .setBounds(sliderX + halfW * 2 - tbW,     revTop + rowStep,         tbW,   subLH);
+    reverbWetMinSlider    .setBounds(sliderX,                       revTop + rowStep + subLH, halfW, 25);
+    reverbWetMaxSlider    .setBounds(sliderX + halfW,               revTop + rowStep + subLH, halfW, 25);
+
+    reverbProbabilitySlider.setBounds(70, revTop + rowStep * 2, getWidth() - 80, 25);
+
+    // --- Equalizer section ---
+    const int revBottom = revTop + rowStep * 2 + 25;
+    sectionEqTitle.setBounds(margin, revBottom + 14, getWidth() - margin * 2, titleH);
+
+    const int eqTop  = revBottom + 14 + titleH + 5;
+    const int eqH    = 120;
     const int labelH = 32;
-    const int totalW = getWidth() - 20;
-    const int bandW = totalW / 3;
+    const int bandW  = (getWidth() - margin * 2) / 3;
 
-    eqLowLabel.setBounds(10, eqTop, bandW, labelH);
-    eqMidLabel.setBounds(10 + bandW, eqTop, bandW, labelH);
-    eqHighLabel.setBounds(10 + bandW * 2, eqTop, bandW, labelH);
+    eqLowLabel .setBounds(margin,              eqTop,          bandW, labelH);
+    eqMidLabel .setBounds(margin + bandW,      eqTop,          bandW, labelH);
+    eqHighLabel.setBounds(margin + bandW * 2,  eqTop,          bandW, labelH);
 
-    eqLowSlider.setBounds(10, eqTop + labelH, bandW, eqH);
-    eqMidSlider.setBounds(10 + bandW, eqTop + labelH, bandW, eqH);
-    eqHighSlider.setBounds(10 + bandW * 2, eqTop + labelH, bandW, eqH);
-
-    // Reverb sliders below EQ
-    const int revTop = eqTop + labelH + eqH + 10;
-    reverbRoomSizeSlider.setBounds(70, revTop, getWidth() - 80, 25);
-    reverbWetSlider.setBounds(70, revTop + 35, getWidth() - 80, 25);
+    eqLowSlider .setBounds(margin,             eqTop + labelH, bandW, eqH);
+    eqMidSlider .setBounds(margin + bandW,     eqTop + labelH, bandW, eqH);
+    eqHighSlider.setBounds(margin + bandW * 2, eqTop + labelH, bandW, eqH);
 }
 
 //==============================================================================
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
+    // Called on the message thread when a transport source changes state
     for (auto* ch : channels)
     {
         if (source != &ch->transportSource)
             continue;
 
-        if (ch->transportSource.isPlaying())
-        {
-            changeState(TransportState::Playing);
-        }
-        else
+        if (!ch->transportSource.isPlaying())
         {
             if (state == TransportState::Playing)
             {
-                // This channel finished naturally -> schedule next file
+                // Track finished naturally -> schedule next
                 startTimer((int)timerIntervalSlider.getValue());
             }
             else if (state == TransportState::Stopping)
             {
-                // User pressed Stop
                 changeState(TransportState::Stopped);
             }
         }
@@ -339,14 +438,9 @@ void MainComponent::changeState(TransportState newState)
     switch (state)
     {
     case TransportState::Stopped:
+        stopTimer();
         playButton.setButtonText("Play");
         playButton.setEnabled(true);
-        break;
-
-    case TransportState::Starting:
-        // Start the channel that was just loaded in play()
-        channels[nextChannel == 0 ? NUM_CHANNELS - 1 : nextChannel - 1]
-            ->transportSource.start();
         break;
 
     case TransportState::Playing:
@@ -354,9 +448,23 @@ void MainComponent::changeState(TransportState newState)
         break;
 
     case TransportState::Stopping:
+        // Detach all sources from the mixer immediately — this silences output
+        // without blocking the message thread. The channels are then cleared
+        // asynchronously once the audio thread is no longer referencing them.
+    {
+        juce::ScopedLock sl(channelsLock);
+        mixer.removeAllInputs();
         for (auto* ch : channels)
-            ch->transportSource.stop();
-        break;
+            ch->transportSource.setSource(nullptr);
+    }
+    // Defer the actual deletion to avoid blocking here
+    juce::MessageManager::callAsync([this]
+        {
+            juce::ScopedLock sl(channelsLock);
+            channels.clear(true);
+        });
+    changeState(TransportState::Stopped);
+    break;
     }
 }
 
@@ -398,7 +506,6 @@ void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
     for (auto& file : folder.findChildFiles(juce::File::findFiles, false, "*.mp3"))
         playlist.add(file);
 
-    // Sort files numerically by filename (ascending)
     std::sort(playlist.begin(), playlist.end(),
         [](const juce::File& a, const juce::File& b)
         {
@@ -418,50 +525,37 @@ void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
 void MainComponent::play()
 {
     startTimer((int)timerIntervalSlider.getValue());
+
     if (currentIndex < 0 || currentIndex >= playlist.size())
         return;
 
-    // Pick the next channel in round-robin order
-    const int targetCh = nextChannel;
-    nextChannel = (nextChannel + 1) % NUM_CHANNELS;
+    // Create a new channel instance for this track
+    auto* ch = createChannel();
+    if (ch == nullptr)
+        return; // MAX_CHANNELS reached
 
-    auto* ch = channels[targetCh];
-
-    // Randomise pan for this channel
-    randomisePan(targetCh);
+    randomisePan(ch);
+    randomiseReverb(ch);
 
     auto file = playlist[currentIndex];
     auto* reader = formatManager.createReaderFor(file);
     if (reader == nullptr)
         return;
 
-    ch->transportSource.setSource(nullptr);   // detach old source first
     auto newSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
     ch->transportSource.setSource(newSource.get(), 0, nullptr, reader->sampleRate);
     ch->readerSource = std::move(newSource);
-
     ch->transportSource.setPosition(0.0);
     ch->transportSource.start();
 
-    DBG("play(): track " + juce::String(currentIndex + 1)
-        + " -> Ch" + juce::String(targetCh + 1)
-        + "  pan=" + juce::String(ch->pan.load(), 2));
+    DBG("play(): track=" + juce::String(currentIndex + 1)
+        + "  pan=" + juce::String(ch->pan.load(), 2)
+        + "  active channels=" + juce::String(channels.size()));
 }
 
-void MainComponent::randomisePan(int ch)
+void MainComponent::randomisePan(PlayChannel* ch)
 {
-    const float newPan = random.nextFloat() * 2.0f - 1.0f; // [-1.0, +1.0]
-    channels[ch]->pan.store(newPan);
-
-    // Rebuild the pan label showing all channels
-    juce::String text;
-    for (int i = 0; i < NUM_CHANNELS; ++i)
-    {
-        const float p = channels[i]->pan.load();
-        juce::String side = (p < -0.05f) ? "L" : (p > 0.05f) ? "R" : "C";
-        text += "Ch" + juce::String(i + 1) + ":" + side + juce::String(p, 2);
-        if (i < NUM_CHANNELS - 1) text += "  ";
-    }
+    ch->pan.store(random.nextFloat() * 2.0f - 1.0f);
 }
 
 void MainComponent::playNext()
@@ -472,7 +566,6 @@ void MainComponent::playNext()
     int nextIndex;
     if (useRandomOrder)
     {
-        // Pick a random track (avoid repeating the current one if possible)
         if (playlist.size() > 1)
         {
             do { nextIndex = random.nextInt(playlist.size()); } while (nextIndex == currentIndex);
@@ -486,7 +579,7 @@ void MainComponent::playNext()
     {
         nextIndex = currentIndex + 1;
         if (nextIndex >= playlist.size())
-            nextIndex = 0; // Wrap around to the first track
+            nextIndex = 0;
     }
 
     currentIndex = nextIndex;
@@ -496,39 +589,54 @@ void MainComponent::playNext()
 //==============================================================================
 void MainComponent::updateEQ()
 {
-    // Called on the message thread; coefficients are swapped atomically by JUCE
     const double sr = currentSampleRate;
 
-    // Low shelf  ~200 Hz
     *eqLeft.get<0>().coefficients =
         *FilterCoefs::makeLowShelf(sr, 200.0, 0.707, juce::Decibels::decibelsToGain((float)eqLowSlider.getValue()));
     *eqRight.get<0>().coefficients =
         *FilterCoefs::makeLowShelf(sr, 200.0, 0.707, juce::Decibels::decibelsToGain((float)eqLowSlider.getValue()));
 
-    // Mid peak  ~1 kHz
     *eqLeft.get<1>().coefficients =
         *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
     *eqRight.get<1>().coefficients =
         *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
 
-    // High shelf ~5 kHz
     *eqLeft.get<2>().coefficients =
         *FilterCoefs::makeHighShelf(sr, 5000.0, 0.707, juce::Decibels::decibelsToGain((float)eqHighSlider.getValue()));
     *eqRight.get<2>().coefficients =
         *FilterCoefs::makeHighShelf(sr, 5000.0, 0.707, juce::Decibels::decibelsToGain((float)eqHighSlider.getValue()));
 }
 
-//==============================================================================
-void MainComponent::updateReverb()
+
+void MainComponent::randomiseReverb(PlayChannel* ch)
 {
+    // Apply reverb only if a random roll is within the probability threshold
+    const float probability = (float)reverbProbabilitySlider.getValue() / 100.0f;
+    if (random.nextFloat() > probability)
+    {
+        // No reverb for this track: set wet=0, dry=1
+        juce::Reverb::Parameters dry;
+        dry.wetLevel = 0.0f;
+        dry.dryLevel = 1.0f;
+        ch->reverb.setParameters(dry);
+        ch->reverb.reset();
+        return;
+    }
+
+    const float roomMin = (float)std::min(reverbRoomSizeMinSlider.getValue(), reverbRoomSizeMaxSlider.getValue());
+    const float roomMax = (float)std::max(reverbRoomSizeMinSlider.getValue(), reverbRoomSizeMaxSlider.getValue());
+    const float wetMin = (float)std::min(reverbWetMinSlider.getValue(), reverbWetMaxSlider.getValue());
+    const float wetMax = (float)std::max(reverbWetMinSlider.getValue(), reverbWetMaxSlider.getValue());
+
     juce::Reverb::Parameters params;
-    params.roomSize = (float)reverbRoomSizeSlider.getValue();
-    params.wetLevel = (float)reverbWetSlider.getValue();
-    params.dryLevel = 1.0f - params.wetLevel;  // Dry fades as wet increases
+    params.roomSize = roomMin + random.nextFloat() * (roomMax - roomMin);
+    params.wetLevel = wetMin + random.nextFloat() * (wetMax - wetMin);
+    params.dryLevel = 1.0f - params.wetLevel;
     params.damping = 0.5f;
     params.width = 1.0f;
     params.freezeMode = 0.0f;
-    reverb.setParameters(params);
+    ch->reverb.setParameters(params);
+    ch->reverb.reset();
 }
 
 void MainComponent::playButtonClicked()
@@ -536,11 +644,10 @@ void MainComponent::playButtonClicked()
     if (state == TransportState::Stopped)
     {
         play();
-        changeState(TransportState::Playing); // already started in play()
+        changeState(TransportState::Playing);
     }
     else
     {
-        stopTimer();
         changeState(TransportState::Stopping);
     }
 }

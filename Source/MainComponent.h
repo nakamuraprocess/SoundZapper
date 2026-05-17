@@ -3,15 +3,12 @@
 #include <JuceHeader.h>
 
 //==============================================================================
-// Holds one independent transport pipeline with its own pan value.
 struct PlayChannel
 {
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::AudioTransportSource                     transportSource;
-
-    // Pan: -1.0 (full left) .. 0.0 (centre) .. +1.0 (full right)
-    // std::atomic so getNextAudioBlock() can read safely from the audio thread.
-    std::atomic<float> pan{ 0.0f };
+    std::atomic<float>                             pan{ 0.0f };
+    juce::Reverb                                   reverb;
 
     PlayChannel() = default;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlayChannel)
@@ -23,111 +20,122 @@ class MainComponent : public juce::AudioAppComponent,
     private juce::Timer
 {
 public:
-    // Number of simultaneous transport channels
-    static constexpr int NUM_CHANNELS = 24;
+    // Maximum number of simultaneously active channels
+    static constexpr int MAX_CHANNELS = 24;
 
     //==========================================================================
     MainComponent();
     ~MainComponent() override;
 
     //==========================================================================
-    // AudioAppComponent overrides
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override;
     void releaseResources() override;
 
-    //==========================================================================
-    // Component overrides
     void paint(juce::Graphics& g) override;
     void resized() override;
 
-    //==========================================================================
-    // ChangeListener override — receives state changes from all transport sources
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
-
-    // Timer override — advances to the next file after a track finishes
     void timerCallback() override;
 
 private:
     //==========================================================================
-    enum class TransportState { Stopped, Starting, Playing, Stopping };
+    enum class TransportState { Stopped, Playing, Stopping };
 
     void changeState(TransportState newState);
     void selectFolder();
     void loadPlaylistFromFolder(const juce::File& folder);
-    void play();       // Load currentIndex into the next round-robin channel and start
-    void playNext();   // Advance currentIndex then call play()
+    void play();
+    void playNext();
     void playButtonClicked();
-    void randomisePan(int ch);   // Assign a random pan to one channel
+    void randomisePan(PlayChannel* ch);
+    void randomiseReverb(PlayChannel* ch);
 
-    void updateEQ();      // Rebuild IIR coefficients from slider values
-    void updateReverb();  // Update reverb parameters from slider values
+    void updateEQ();
+
+    // Create a new PlayChannel, prepare it, and add it to the active list.
+    // Returns nullptr if MAX_CHANNELS is already reached.
+    PlayChannel* createChannel();
+
+    // Remove all channels that have finished playing (called on message thread).
+    void removeFinishedChannels();
 
     //==========================================================================
     // --- UI ---
     juce::TextButton openButton;
     juce::TextButton playButton;
-    juce::Label      currentPositionLabel;  // "track N / total"
+    juce::Label      currentPositionLabel;
 
-    juce::Slider        timerIntervalSlider;    // Controls the delay between tracks (ms)
-    juce::Label         timerIntervalLabel;     // Shows the current interval value
+    juce::Slider       timerIntervalSlider;
+    juce::Label        timerIntervalLabel;
 
-    juce::ToggleButton  randomOrderButton;      // Switch between sequential and random order
-    bool                useRandomOrder{ false };
+    juce::ToggleButton randomOrderButton;
+    bool               useRandomOrder{ false };
 
-    juce::Slider        masterVolumeSlider;     // Master volume (0.0 to 1.0)
-    juce::Label         masterVolumeLabel;      // "Volume:" label
+    juce::Slider       masterVolumeSlider;
+    juce::Label        masterVolumeLabel;
 
-    // --- EQ sliders (±12 dB) ---
-    juce::Slider  eqLowSlider;       // Low shelf  (~200 Hz)
-    juce::Slider  eqMidSlider;       // Peak       (~1 kHz)
-    juce::Slider  eqHighSlider;      // High shelf (~5 kHz)
+    juce::Label   sectionPlaybackTitle;
+    juce::Label   sectionReverbTitle;
+    juce::Label   sectionEqTitle;
+
+    juce::Slider  eqLowSlider;
+    juce::Slider  eqMidSlider;
+    juce::Slider  eqHighSlider;
     juce::Label   eqLowLabel;
     juce::Label   eqMidLabel;
     juce::Label   eqHighLabel;
 
-    // --- Reverb sliders ---
-    juce::Slider  reverbRoomSizeSlider;  // Room size  (0.0 to 1.0)
-    juce::Slider  reverbWetSlider;       // Wet level  (0.0 to 1.0)
+    juce::Slider  reverbRoomSizeMinSlider;
+    juce::Slider  reverbRoomSizeMaxSlider;
+    juce::Slider  reverbWetMinSlider;
+    juce::Slider  reverbWetMaxSlider;
     juce::Label   reverbRoomSizeLabel;
     juce::Label   reverbWetLabel;
+    juce::Label   reverbRoomSizeMinLabel;
+    juce::Label   reverbRoomSizeMaxLabel;
+    juce::Label   reverbWetMinLabel;
+    juce::Label   reverbWetMaxLabel;
+
+    juce::Slider  reverbProbabilitySlider;  // 0-100%: chance of reverb per track
+    juce::Label   reverbProbabilityLabel;
 
     std::unique_ptr<juce::FileChooser> chooser;
 
+    //==========================================================================
     // --- Audio pipeline ---
-    juce::AudioFormatManager    formatManager;
-    juce::MixerAudioSource      mixer;
-    juce::OwnedArray<PlayChannel> channels; // NUM_CHANNELS entries
+    juce::AudioFormatManager formatManager;
+    juce::MixerAudioSource   mixer;
 
-    // Round-robin counter: which channel receives the next play() call
-    int nextChannel{ 0 };
+    // Active channels — created on play(), destroyed when transport finishes
+    juce::OwnedArray<PlayChannel> channels;
+    juce::CriticalSection         channelsLock; // guards channels during add/remove
 
-    // --- Playback state (single playlist, single Play/Stop button) ---
+    double currentSampleRate{ 44100.0 };
+    int    currentBlockSize{ 512 };
+
+    //==========================================================================
+    // --- Playback state ---
     TransportState state{ TransportState::Stopped };
 
-    // --- Playlist ---
     juce::File              currentFolder;
     juce::Array<juce::File> playlist;
     int                     currentIndex{ -1 };
 
     juce::Random random;
 
-    // Master volume applied in getNextAudioBlock (atomic for thread safety)
-    std::atomic<float> masterVolume{ 1.0f };
+    std::atomic<float> masterVolume{ 0.5f };
 
-    // --- 3-band EQ (Low shelf / Mid peak / High shelf) ---
-    // One stereo processor chain: L and R filters run in parallel
+    //==========================================================================
+    // --- 3-band EQ ---
     using Filter = juce::dsp::IIR::Filter<float>;
     using FilterCoefs = juce::dsp::IIR::Coefficients<float>;
     using EqChain = juce::dsp::ProcessorChain<Filter, Filter, Filter>;
 
-    EqChain eqLeft;   // Processes the left  channel
-    EqChain eqRight;  // Processes the right channel
+    EqChain eqLeft;
+    EqChain eqRight;
 
-    double currentSampleRate{ 44100.0 };
-
-    // --- Reverb (applied after EQ, stereo) ---
-    juce::Reverb reverb;
+    // Reverb is per-channel inside PlayChannel
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

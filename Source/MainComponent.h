@@ -10,6 +10,13 @@ struct PlayChannel
     std::atomic<float>                             pan{ 0.0f };
     juce::Reverb                                   reverb;
 
+    // Reverb tail state:
+    //   false = file is still playing normally
+    //   true  = file finished, counting down tailSamplesRemaining
+    bool tailMode{ false };
+    int  tailSamplesRemaining{ 0 };
+    std::atomic<bool> tailFinished{ false };  // set by audio thread when tail is done
+
     PlayChannel() = default;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PlayChannel)
 };
@@ -72,6 +79,9 @@ private:
     juce::ToggleButton randomOrderButton;
     bool               useRandomOrder{ false };
 
+    juce::ComboBox  panModeComboBox;   // Left / Centre / Right / Random
+    juce::Label     panModeLabel;
+
     juce::Slider       masterVolumeSlider;
     juce::Label        masterVolumeLabel;
 
@@ -97,7 +107,7 @@ private:
     juce::Label   reverbWetMinLabel;
     juce::Label   reverbWetMaxLabel;
 
-    juce::Slider  reverbProbabilitySlider;  // 0-100%: chance of reverb per track
+    juce::Slider  reverbProbabilitySlider;
     juce::Label   reverbProbabilityLabel;
 
     std::unique_ptr<juce::FileChooser> chooser;
@@ -109,7 +119,7 @@ private:
 
     // Active channels — created on play(), destroyed when transport finishes
     juce::OwnedArray<PlayChannel> channels;
-    juce::CriticalSection         channelsLock; // guards channels during add/remove
+    juce::CriticalSection         channelsLock;
 
     double currentSampleRate{ 44100.0 };
     int    currentBlockSize{ 512 };

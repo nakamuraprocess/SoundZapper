@@ -121,7 +121,7 @@ private:
     juce::OwnedArray<PlayChannel> channels;
     juce::CriticalSection         channelsLock;
 
-    double currentSampleRate{ 44100.0 };
+    double currentSampleRate{ 48000.0 };
     int    currentBlockSize{ 512 };
 
     //==========================================================================

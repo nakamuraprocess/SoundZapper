@@ -139,7 +139,7 @@ MainComponent::MainComponent()
     // Reverb probability slider (0-100%)
     addAndMakeVisible(reverbProbabilitySlider);
     reverbProbabilitySlider.setRange(0.0, 100.0, 1.0);
-    reverbProbabilitySlider.setValue(50.0);
+    reverbProbabilitySlider.setValue(20.0);
     reverbProbabilitySlider.setTextValueSuffix(" %");
     reverbProbabilitySlider.setSliderStyle(juce::Slider::LinearHorizontal);
     reverbProbabilitySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
@@ -507,7 +507,7 @@ void MainComponent::selectFolder()
 {
     chooser = std::make_unique<juce::FileChooser>(
         "Select a folder containing MP3 files...",
-        juce::File("E:\\Sounds\\SoundZapper"),
+        juce::File("E:\\Sounds"),
         ""
     );
 
@@ -522,6 +522,9 @@ void MainComponent::selectFolder()
 
             currentFolder = folder;
             loadPlaylistFromFolder(currentFolder);
+
+            // Show the selected folder name on the button
+            openButton.setButtonText(folder.getFileName());
 
             if (!playlist.isEmpty())
             {
@@ -559,8 +562,6 @@ void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
 
 void MainComponent::play()
 {
-    startTimer((int)timerIntervalSlider.getValue());
-
     if (currentIndex < 0 || currentIndex >= playlist.size())
         return;
 
@@ -594,10 +595,10 @@ void MainComponent::randomisePan(PlayChannel* ch)
 
     switch (mode)
     {
-    case 1: pan = -1.0f; break;                            // Left
-    case 2: pan = 0.0f; break;                            // Centre
-    case 3: pan = 1.0f; break;                            // Right
-    case 4: pan = random.nextFloat() * 2.0f - 1.0f; break; // Random
+    case 1: pan = -1.0f; break;                             // Left
+    case 2: pan = 0.0f; break;                             // Centre
+    case 3: pan = 1.0f; break;                             // Right
+    case 4: pan = random.nextFloat() * 2.0f - 1.0f; break;  // Random
     default: pan = 0.0f; break;
     }
 

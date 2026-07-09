@@ -52,6 +52,8 @@ private:
     void changeState(TransportState newState);
     void selectFolder();
     void loadPlaylistFromFolder(const juce::File& folder);
+    void scanSubFolders(const juce::File& parent);  // Find sub-directories containing WAVs
+    void loadSubFolder(int index);                   // Switch to sub-folder by index
     void play();
     void playNext();
     void playButtonClicked();
@@ -73,6 +75,13 @@ private:
     juce::TextButton playButton;
     juce::Label      currentPositionLabel;
 
+    // Sub-folder navigation
+    juce::TextButton subFolderPrevButton;   // "<"
+    juce::TextButton subFolderNextButton;   // ">"
+    juce::Label      subFolderLabel;        // e.g. "cluster_003"
+    juce::Array<juce::File> subFolders;
+    int              currentSubFolderIndex{ -1 };
+
     juce::Slider       timerIntervalSlider;
     juce::Label        timerIntervalLabel;
 
@@ -89,10 +98,12 @@ private:
     juce::Label   sectionReverbTitle;
     juce::Label   sectionEqTitle;
 
-    juce::Slider  eqLowSlider;
-    juce::Slider  eqMidSlider;
-    juce::Slider  eqHighSlider;
+    juce::Slider  eqLowSlider;      // Low shelf  (~200 Hz)
+    juce::Slider  eqMidLowSlider;   // Peak       (~500 Hz)
+    juce::Slider  eqMidSlider;      // Peak       (~1 kHz)
+    juce::Slider  eqHighSlider;     // High shelf (~5 kHz)
     juce::Label   eqLowLabel;
+    juce::Label   eqMidLowLabel;
     juce::Label   eqMidLabel;
     juce::Label   eqHighLabel;
 
@@ -140,7 +151,7 @@ private:
     // --- 3-band EQ ---
     using Filter = juce::dsp::IIR::Filter<float>;
     using FilterCoefs = juce::dsp::IIR::Coefficients<float>;
-    using EqChain = juce::dsp::ProcessorChain<Filter, Filter, Filter>;
+    using EqChain = juce::dsp::ProcessorChain<Filter, Filter, Filter, Filter>;
 
     EqChain eqLeft;
     EqChain eqRight;

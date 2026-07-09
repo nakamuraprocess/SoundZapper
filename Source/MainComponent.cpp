@@ -21,18 +21,49 @@ MainComponent::MainComponent()
     addAndMakeVisible(&currentPositionLabel);
     currentPositionLabel.setText("", juce::dontSendNotification);
 
+    // Sub-folder navigation (< cluster_XXX >)
+    addAndMakeVisible(&subFolderPrevButton);
+    subFolderPrevButton.setButtonText("<");
+    subFolderPrevButton.onClick = [this]
+        {
+            if (subFolders.isEmpty()) return;
+            int idx = currentSubFolderIndex - 1;
+            if (idx < 0) idx = subFolders.size() - 1;  // wrap to last
+            loadSubFolder(idx);
+        };
+
+    addAndMakeVisible(&subFolderNextButton);
+    subFolderNextButton.setButtonText(">");
+    subFolderNextButton.onClick = [this]
+        {
+            if (subFolders.isEmpty()) return;
+            int idx = currentSubFolderIndex + 1;
+            if (idx >= subFolders.size()) idx = 0;  // wrap to first
+            loadSubFolder(idx);
+        };
+
+    addAndMakeVisible(&subFolderLabel);
+    subFolderLabel.setText("(no sub-folder)", juce::dontSendNotification);
+    subFolderLabel.setJustificationType(juce::Justification::centred);
+
     // Interval slider (logarithmic, 50-3000 ms)
     addAndMakeVisible(&timerIntervalSlider);
     {
-        juce::NormalisableRange<double> logRange(50.0, 3000.0);
-        logRange.setSkewForCentre(500.0);
+        juce::NormalisableRange<double> logRange(50.0, 5000.0);
+        logRange.setSkewForCentre(1000.0);
         timerIntervalSlider.setNormalisableRange(logRange);
     }
-    timerIntervalSlider.setValue(500.0);
+    timerIntervalSlider.setValue(1000.0);
     timerIntervalSlider.setTextValueSuffix(" ms");
     timerIntervalSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     timerIntervalSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 70, 20);
     timerIntervalSlider.setNumDecimalPlacesToDisplay(0);
+    timerIntervalSlider.onValueChange = [this]
+        {
+            // Restart the timer immediately with the new interval if currently playing
+            if (state == TransportState::Playing)
+                startTimer((int)timerIntervalSlider.getValue());
+        };
 
     addAndMakeVisible(&timerIntervalLabel);
     timerIntervalLabel.setText("Interval:", juce::dontSendNotification);
@@ -91,6 +122,7 @@ MainComponent::MainComponent()
         };
 
     setupEqSlider(eqLowSlider, eqLowLabel, "Low\n200Hz");
+    setupEqSlider(eqMidLowSlider, eqMidLowLabel, "Mid-Low\n500Hz");
     setupEqSlider(eqMidSlider, eqMidLabel, "Mid\n1kHz");
     setupEqSlider(eqHighSlider, eqHighLabel, "High\n5kHz");
 
@@ -109,7 +141,6 @@ MainComponent::MainComponent()
                 };
             init(minS, defaultMin);
             init(maxS, defaultMax);
-            // Constrain: min <= max
             minS.onValueChange = [&minS, &maxS] {
                 if (minS.getValue() > maxS.getValue())
                     maxS.setValue(minS.getValue(), juce::dontSendNotification);
@@ -162,7 +193,7 @@ MainComponent::MainComponent()
     setupSectionTitle(sectionEqTitle, "Equalizer");
 
     setAudioChannels(0, 2);
-    setSize(400, 650);
+    setSize(400, 685);
 }
 
 MainComponent::~MainComponent()
@@ -210,7 +241,6 @@ void MainComponent::removeFinishedChannels()
 
         if (ch->tailMode)
         {
-            // Audio thread signals completion via tailFinished
             if (ch->tailFinished.load())
             {
                 mixer.removeInputSource(&ch->transportSource);
@@ -223,13 +253,11 @@ void MainComponent::removeFinishedChannels()
         {
             if (ch->tailSamplesRemaining > 0)
             {
-                // File finished — enter tail mode to let reverb decay
                 ch->tailMode = true;
                 DBG("tail mode: " + juce::String(ch->tailSamplesRemaining / (int)currentSampleRate) + "s remaining");
             }
             else
             {
-                // No reverb tail needed — remove immediately
                 mixer.removeInputSource(&ch->transportSource);
                 ch->transportSource.setSource(nullptr);
                 channels.remove(i, true);
@@ -241,10 +269,11 @@ void MainComponent::removeFinishedChannels()
 }
 
 //==============================================================================
+// Timer callback: fires strictly at the set interval regardless of track length.
+// This is the sole trigger for advancing to the next track.
 void MainComponent::timerCallback()
 {
     removeFinishedChannels();
-
     playNext();
 
     if (currentIndex >= 0 && currentIndex < playlist.size())
@@ -285,7 +314,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
         for (auto* ch : channels)
         {
-            // Skip channels with no source, unless in tail mode (reverb decay)
             if (ch->readerSource.get() == nullptr && !ch->tailMode)
                 continue;
 
@@ -293,7 +321,6 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
             if (!ch->tailMode)
             {
-                // Normal playback
                 juce::AudioSourceChannelInfo info(&channelBuf, 0, bufferToFill.numSamples);
                 ch->transportSource.getNextAudioBlock(info);
             }
@@ -304,7 +331,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
                 if (ch->tailSamplesRemaining <= 0)
                 {
                     ch->tailFinished.store(true);
-                    continue; // Skip further processing for this channel
+                    continue;
                 }
             }
 
@@ -394,20 +421,25 @@ void MainComponent::resized()
     const int titleH = 22;
     const int margin = 10;
 
-    // --- Playback section ---
     sectionPlaybackTitle.setBounds(margin, 10, getWidth() - margin * 2, titleH);
     openButton.setBounds(margin, 37, getWidth() - margin * 2, 30);
-    playButton.setBounds(margin, 77, getWidth() - margin * 2, 30);
-    currentPositionLabel.setBounds(margin, 117, getWidth() - margin * 2, 25);
-    timerIntervalSlider.setBounds(70, 152, getWidth() - 80, 25);
-    randomOrderButton.setBounds(margin, 187, getWidth() - margin * 2, 25);
-    panModeComboBox.setBounds(70, 222, getWidth() - 80, 25);
-    masterVolumeSlider.setBounds(70, 257, getWidth() - 80, 25);
 
-    // --- Reverb section ---
-    sectionReverbTitle.setBounds(margin, 292, getWidth() - margin * 2, titleH);
+    // Sub-folder navigation row: [<] [ cluster_XXX ] [>]
+    const int navY = 72;
+    subFolderPrevButton.setBounds(margin, navY, 35, 25);
+    subFolderNextButton.setBounds(getWidth() - margin - 35, navY, 35, 25);
+    subFolderLabel.setBounds(margin + 40, navY, getWidth() - margin * 2 - 80, 25);
 
-    const int revTop = 319;
+    playButton.setBounds(margin, 105, getWidth() - margin * 2, 30);
+    currentPositionLabel.setBounds(margin, 145, getWidth() - margin * 2, 25);
+    timerIntervalSlider.setBounds(70, 180, getWidth() - 80, 25);
+    randomOrderButton.setBounds(margin, 215, getWidth() - margin * 2, 25);
+    panModeComboBox.setBounds(70, 250, getWidth() - 80, 25);
+    masterVolumeSlider.setBounds(70, 285, getWidth() - 80, 25);
+
+    sectionReverbTitle.setBounds(margin, 320, getWidth() - margin * 2, titleH);
+
+    const int revTop = 347;
     const int halfW = (getWidth() - 80) / 2;
     const int sliderX = 55;
     const int tbW = 45;
@@ -428,25 +460,28 @@ void MainComponent::resized()
 
     reverbProbabilitySlider.setBounds(70, revTop + rowStep * 2, getWidth() - 80, 25);
 
-    // --- Equalizer section ---
     const int revBottom = revTop + rowStep * 2 + 25;
     sectionEqTitle.setBounds(margin, revBottom + 14, getWidth() - margin * 2, titleH);
 
     const int eqTop = revBottom + 14 + titleH + 5;
     const int eqH = 120;
     const int labelH = 32;
-    const int bandW = (getWidth() - margin * 2) / 3;
 
-    eqLowLabel.setBounds(margin, eqTop, bandW, labelH);
-    eqMidLabel.setBounds(margin + bandW, eqTop, bandW, labelH);
-    eqHighLabel.setBounds(margin + bandW * 2, eqTop, bandW, labelH);
+    const int bandW4 = (getWidth() - margin * 2) / 4;
+    eqLowLabel.setBounds(margin, eqTop, bandW4, labelH);
+    eqMidLowLabel.setBounds(margin + bandW4, eqTop, bandW4, labelH);
+    eqMidLabel.setBounds(margin + bandW4 * 2, eqTop, bandW4, labelH);
+    eqHighLabel.setBounds(margin + bandW4 * 3, eqTop, bandW4, labelH);
 
-    eqLowSlider.setBounds(margin, eqTop + labelH, bandW, eqH);
-    eqMidSlider.setBounds(margin + bandW, eqTop + labelH, bandW, eqH);
-    eqHighSlider.setBounds(margin + bandW * 2, eqTop + labelH, bandW, eqH);
+    eqLowSlider.setBounds(margin, eqTop + labelH, bandW4, eqH);
+    eqMidLowSlider.setBounds(margin + bandW4, eqTop + labelH, bandW4, eqH);
+    eqMidSlider.setBounds(margin + bandW4 * 2, eqTop + labelH, bandW4, eqH);
+    eqHighSlider.setBounds(margin + bandW4 * 3, eqTop + labelH, bandW4, eqH);
 }
 
 //==============================================================================
+// changeListenerCallback is kept only for the Stopping state.
+// Track completion no longer triggers the next playback — the timer does.
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
     for (auto* ch : channels)
@@ -454,12 +489,10 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
         if (source != &ch->transportSource)
             continue;
 
-        if (!ch->transportSource.isPlaying())
+        if (!ch->transportSource.isPlaying()
+            && state == TransportState::Stopping)
         {
-            if (state == TransportState::Playing)
-                startTimer((int)timerIntervalSlider.getValue());
-            else if (state == TransportState::Stopping)
-                changeState(TransportState::Stopped);
+            changeState(TransportState::Stopped);
         }
         break;
     }
@@ -506,7 +539,7 @@ void MainComponent::changeState(TransportState newState)
 void MainComponent::selectFolder()
 {
     chooser = std::make_unique<juce::FileChooser>(
-        "Select a folder containing MP3 files...",
+        "Select a folder containing WAV files...",
         juce::File("E:\\Sounds"),
         ""
     );
@@ -521,18 +554,29 @@ void MainComponent::selectFolder()
                 return;
 
             currentFolder = folder;
-            loadPlaylistFromFolder(currentFolder);
-
-            // Show the selected folder name on the button
             openButton.setButtonText(folder.getFileName());
 
-            if (!playlist.isEmpty())
+            // Look for sub-folders that contain WAV files
+            scanSubFolders(folder);
+
+            if (!subFolders.isEmpty())
             {
-                currentIndex = 0;
-                currentPositionLabel.setText(
-                    "1 / " + juce::String(playlist.size())
-                    + "  " + playlist[0].getFileNameWithoutExtension(),
-                    juce::dontSendNotification);
+                // Load the first sub-folder
+                loadSubFolder(0);
+            }
+            else
+            {
+                // No sub-folders: fall back to loading WAVs directly from the selected folder
+                subFolderLabel.setText("(no sub-folder)", juce::dontSendNotification);
+                loadPlaylistFromFolder(folder);
+                if (!playlist.isEmpty())
+                {
+                    currentIndex = 0;
+                    currentPositionLabel.setText(
+                        "1 / " + juce::String(playlist.size())
+                        + "  " + playlist[0].getFileNameWithoutExtension(),
+                        juce::dontSendNotification);
+                }
             }
         });
 }
@@ -558,6 +602,50 @@ void MainComponent::loadPlaylistFromFolder(const juce::File& folder)
         currentIndex = -1;
     else
         playButton.setEnabled(true);
+}
+
+void MainComponent::scanSubFolders(const juce::File& parent)
+{
+    subFolders.clear();
+    currentSubFolderIndex = -1;
+
+    // Collect immediate sub-directories that contain at least one WAV file
+    for (auto& dir : parent.findChildFiles(juce::File::findDirectories, false))
+    {
+        if (!dir.findChildFiles(juce::File::findFiles, false, "*.wav").isEmpty())
+            subFolders.add(dir);
+    }
+
+    // Sort sub-folder names alphabetically
+    std::sort(subFolders.begin(), subFolders.end(),
+        [](const juce::File& a, const juce::File& b)
+        {
+            return a.getFileName() < b.getFileName();
+        });
+
+    DBG("scanSubFolders: found " + juce::String(subFolders.size()) + " sub-folder(s)");
+}
+
+void MainComponent::loadSubFolder(int index)
+{
+    if (index < 0 || index >= subFolders.size())
+        return;
+
+    currentSubFolderIndex = index;
+    auto folder = subFolders[index];
+
+    subFolderLabel.setText(folder.getFileName(), juce::dontSendNotification);
+
+    loadPlaylistFromFolder(folder);
+
+    if (!playlist.isEmpty())
+    {
+        currentIndex = 0;
+        currentPositionLabel.setText(
+            "1 / " + juce::String(playlist.size())
+            + "  " + playlist[0].getFileNameWithoutExtension(),
+            juce::dontSendNotification);
+    }
 }
 
 void MainComponent::play()
@@ -638,19 +726,28 @@ void MainComponent::updateEQ()
 {
     const double sr = currentSampleRate;
 
+    // Band 0: Low shelf ~200 Hz
     *eqLeft.get<0>().coefficients =
         *FilterCoefs::makeLowShelf(sr, 200.0, 0.707, juce::Decibels::decibelsToGain((float)eqLowSlider.getValue()));
     *eqRight.get<0>().coefficients =
         *FilterCoefs::makeLowShelf(sr, 200.0, 0.707, juce::Decibels::decibelsToGain((float)eqLowSlider.getValue()));
 
+    // Band 1: Peak ~500 Hz
     *eqLeft.get<1>().coefficients =
-        *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
+        *FilterCoefs::makePeakFilter(sr, 500.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidLowSlider.getValue()));
     *eqRight.get<1>().coefficients =
+        *FilterCoefs::makePeakFilter(sr, 500.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidLowSlider.getValue()));
+
+    // Band 2: Peak ~1 kHz
+    *eqLeft.get<2>().coefficients =
+        *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
+    *eqRight.get<2>().coefficients =
         *FilterCoefs::makePeakFilter(sr, 1000.0, 0.707, juce::Decibels::decibelsToGain((float)eqMidSlider.getValue()));
 
-    *eqLeft.get<2>().coefficients =
+    // Band 3: High shelf ~5 kHz
+    *eqLeft.get<3>().coefficients =
         *FilterCoefs::makeHighShelf(sr, 5000.0, 0.707, juce::Decibels::decibelsToGain((float)eqHighSlider.getValue()));
-    *eqRight.get<2>().coefficients =
+    *eqRight.get<3>().coefficients =
         *FilterCoefs::makeHighShelf(sr, 5000.0, 0.707, juce::Decibels::decibelsToGain((float)eqHighSlider.getValue()));
 }
 
@@ -664,7 +761,7 @@ void MainComponent::randomiseReverb(PlayChannel* ch)
         dry.dryLevel = 1.0f;
         ch->reverb.setParameters(dry);
         ch->reverb.reset();
-        ch->tailSamplesRemaining = 0;  // No tail needed
+        ch->tailSamplesRemaining = 0;
         return;
     }
 
@@ -683,7 +780,7 @@ void MainComponent::randomiseReverb(PlayChannel* ch)
     ch->reverb.setParameters(params);
     ch->reverb.reset();
 
-    // Estimate tail duration: roomSize * 6 seconds (max ~6 s for roomSize=1.0)
+    // Estimate tail duration: roomSize * 6 seconds
     const float tailSeconds = params.roomSize * 6.0f;
     ch->tailSamplesRemaining = (int)(tailSeconds * (float)currentSampleRate);
 }
@@ -694,6 +791,8 @@ void MainComponent::playButtonClicked()
     {
         play();
         changeState(TransportState::Playing);
+        // Start the interval timer immediately after first play
+        startTimer((int)timerIntervalSlider.getValue());
     }
     else
     {

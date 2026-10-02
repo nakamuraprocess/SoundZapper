@@ -107,16 +107,13 @@ private:
     juce::Label   eqMidLabel;
     juce::Label   eqHighLabel;
 
-    juce::Slider  reverbRoomSizeMinSlider;
-    juce::Slider  reverbRoomSizeMaxSlider;
-    juce::Slider  reverbWetMinSlider;
-    juce::Slider  reverbWetMaxSlider;
+    // Two-value range sliders: min and max thumbs on a single slider
+    juce::Slider  reverbRoomSizeRangeSlider;
+    juce::Slider  reverbWetRangeSlider;
     juce::Label   reverbRoomSizeLabel;
     juce::Label   reverbWetLabel;
-    juce::Label   reverbRoomSizeMinLabel;
-    juce::Label   reverbRoomSizeMaxLabel;
-    juce::Label   reverbWetMinLabel;
-    juce::Label   reverbWetMaxLabel;
+    juce::Label   reverbRoomSizeValueLabel;  // Shows "0.20 - 0.90"
+    juce::Label   reverbWetValueLabel;       // Shows "0.10 - 0.60"
 
     juce::Slider  reverbProbabilitySlider;
     juce::Label   reverbProbabilityLabel;

@@ -126,46 +126,44 @@ MainComponent::MainComponent()
     setupEqSlider(eqMidSlider, eqMidLabel, "Mid\n1kHz");
     setupEqSlider(eqHighSlider, eqHighLabel, "High\n5kHz");
 
-    // Reverb range sliders: random value is chosen per channel within [min, max]
-    auto setupRevPair = [this](juce::Slider& minS, juce::Label& minL,
-        juce::Slider& maxS, juce::Label& maxL,
+    // Reverb range sliders (TwoValueHorizontal: min and max thumbs on one slider)
+    // JUCE guarantees min <= max automatically.
+    auto setupRangeSlider = [this](juce::Slider& s, juce::Label& valueLabel,
         double defaultMin, double defaultMax)
         {
-            auto init = [this](juce::Slider& s, double val)
+            addAndMakeVisible(s);
+            s.setSliderStyle(juce::Slider::TwoValueHorizontal);
+            s.setRange(0.0, 1.0, 0.01);
+            s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+
+            // IMPORTANT: set Max before Min.
+            // TwoValue sliders clamp min <= max internally, so setting Min first
+            // (while Max is still at its default 0) would drag Max along with it.
+            s.setMaxValue(defaultMax, juce::dontSendNotification);
+            s.setMinValue(defaultMin, juce::dontSendNotification);
+
+            addAndMakeVisible(valueLabel);
+            valueLabel.setJustificationType(juce::Justification::centredRight);
+
+            // Update the value label whenever either thumb moves
+            s.onValueChange = [&s, &valueLabel]
                 {
-                    addAndMakeVisible(s);
-                    s.setRange(0.0, 1.0, 0.01);
-                    s.setValue(val);
-                    s.setSliderStyle(juce::Slider::LinearHorizontal);
-                    s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 45, 20);
+                    valueLabel.setText(juce::String(s.getMinValue(), 2) + " - "
+                        + juce::String(s.getMaxValue(), 2),
+                        juce::dontSendNotification);
                 };
-            init(minS, defaultMin);
-            init(maxS, defaultMax);
-            minS.onValueChange = [&minS, &maxS] {
-                if (minS.getValue() > maxS.getValue())
-                    maxS.setValue(minS.getValue(), juce::dontSendNotification);
-                };
-            maxS.onValueChange = [&minS, &maxS] {
-                if (maxS.getValue() < minS.getValue())
-                    minS.setValue(maxS.getValue(), juce::dontSendNotification);
-                };
-            addAndMakeVisible(minL);
-            minL.setText("Min", juce::dontSendNotification);
-            minL.setJustificationType(juce::Justification::centred);
-            addAndMakeVisible(maxL);
-            maxL.setText("Max", juce::dontSendNotification);
-            maxL.setJustificationType(juce::Justification::centred);
+
+            // Populate the label from the actual slider values so they always agree
+            s.onValueChange();
         };
 
     addAndMakeVisible(reverbRoomSizeLabel);
     reverbRoomSizeLabel.setText("Room:", juce::dontSendNotification);
-    setupRevPair(reverbRoomSizeMinSlider, reverbRoomSizeMinLabel,
-        reverbRoomSizeMaxSlider, reverbRoomSizeMaxLabel, 0.2, 0.9);
+    setupRangeSlider(reverbRoomSizeRangeSlider, reverbRoomSizeValueLabel, 0.2, 0.9);
 
     addAndMakeVisible(reverbWetLabel);
     reverbWetLabel.setText("Wet:", juce::dontSendNotification);
-    setupRevPair(reverbWetMinSlider, reverbWetMinLabel,
-        reverbWetMaxSlider, reverbWetMaxLabel, 0.1, 0.6);
+    setupRangeSlider(reverbWetRangeSlider, reverbWetValueLabel, 0.1, 0.6);
 
     // Reverb probability slider (0-100%)
     addAndMakeVisible(reverbProbabilitySlider);
@@ -440,27 +438,27 @@ void MainComponent::resized()
     sectionReverbTitle.setBounds(margin, 320, getWidth() - margin * 2, titleH);
 
     const int revTop = 347;
-    const int halfW = (getWidth() - 80) / 2;
-    const int sliderX = 55;
-    const int tbW = 45;
-    const int subLH = 18;
-    const int rowStep = subLH + 25 + 8;
+    const int rowH = 25;
+    const int rowGap = 32;
+    const int labelW = 45;
+    const int valueW = 75;
+    const int sliderX = margin + labelW + 5;
+    const int sliderW = getWidth() - sliderX - valueW - margin - 5;
 
-    reverbRoomSizeLabel.setBounds(margin, revTop + subLH, 45, 25);
-    reverbRoomSizeMinLabel.setBounds(sliderX + halfW - tbW, revTop, tbW, subLH);
-    reverbRoomSizeMaxLabel.setBounds(sliderX + halfW * 2 - tbW, revTop, tbW, subLH);
-    reverbRoomSizeMinSlider.setBounds(sliderX, revTop + subLH, halfW, 25);
-    reverbRoomSizeMaxSlider.setBounds(sliderX + halfW, revTop + subLH, halfW, 25);
+    // Rev Prob row (first)
+    reverbProbabilitySlider.setBounds(70, revTop, getWidth() - 80, rowH);
 
-    reverbWetLabel.setBounds(margin, revTop + rowStep + subLH, 45, 25);
-    reverbWetMinLabel.setBounds(sliderX + halfW - tbW, revTop + rowStep, tbW, subLH);
-    reverbWetMaxLabel.setBounds(sliderX + halfW * 2 - tbW, revTop + rowStep, tbW, subLH);
-    reverbWetMinSlider.setBounds(sliderX, revTop + rowStep + subLH, halfW, 25);
-    reverbWetMaxSlider.setBounds(sliderX + halfW, revTop + rowStep + subLH, halfW, 25);
+    // Room row: [Room:] [====range slider====] [0.20 - 0.90]
+    reverbRoomSizeLabel.setBounds(margin, revTop + rowGap, labelW, rowH);
+    reverbRoomSizeRangeSlider.setBounds(sliderX, revTop + rowGap, sliderW, rowH);
+    reverbRoomSizeValueLabel.setBounds(sliderX + sliderW + 5, revTop + rowGap, valueW, rowH);
 
-    reverbProbabilitySlider.setBounds(70, revTop + rowStep * 2, getWidth() - 80, 25);
+    // Wet row
+    reverbWetLabel.setBounds(margin, revTop + rowGap * 2, labelW, rowH);
+    reverbWetRangeSlider.setBounds(sliderX, revTop + rowGap * 2, sliderW, rowH);
+    reverbWetValueLabel.setBounds(sliderX + sliderW + 5, revTop + rowGap * 2, valueW, rowH);
 
-    const int revBottom = revTop + rowStep * 2 + 25;
+    const int revBottom = revTop + rowGap * 2 + 25;
     sectionEqTitle.setBounds(margin, revBottom + 14, getWidth() - margin * 2, titleH);
 
     const int eqTop = revBottom + 14 + titleH + 5;
@@ -765,10 +763,11 @@ void MainComponent::randomiseReverb(PlayChannel* ch)
         return;
     }
 
-    const float roomMin = (float)std::min(reverbRoomSizeMinSlider.getValue(), reverbRoomSizeMaxSlider.getValue());
-    const float roomMax = (float)std::max(reverbRoomSizeMinSlider.getValue(), reverbRoomSizeMaxSlider.getValue());
-    const float wetMin = (float)std::min(reverbWetMinSlider.getValue(), reverbWetMaxSlider.getValue());
-    const float wetMax = (float)std::max(reverbWetMinSlider.getValue(), reverbWetMaxSlider.getValue());
+    // TwoValueHorizontal sliders already guarantee min <= max
+    const float roomMin = (float)reverbRoomSizeRangeSlider.getMinValue();
+    const float roomMax = (float)reverbRoomSizeRangeSlider.getMaxValue();
+    const float wetMin = (float)reverbWetRangeSlider.getMinValue();
+    const float wetMax = (float)reverbWetRangeSlider.getMaxValue();
 
     juce::Reverb::Parameters params;
     params.roomSize = roomMin + random.nextFloat() * (roomMax - roomMin);
